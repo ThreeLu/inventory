@@ -126,6 +126,24 @@ def normalize_asset_id(value):
     return f"{s[:3]}-{s[3:]}"
 
 
+def needs_label(data, tags):
+    """第一个标签是「不贴标签」的类别（衣服、鞋……）就不给编号。"""
+    return not (tags and tags[0] in data.get("unlabeledTags", []))
+
+
+def prefix_for(data, tags):
+    return (data.get("tagCodes") or {}).get(tags[0], "000") if tags else "000"
+
+
+def next_in_prefix(data, prefix, taken=()):
+    nums = [int(x["assetId"][4:]) for x in data["items"] + data["locations"] if (x.get("assetId") or "").startswith(prefix + "-")]
+    nums += [int(a[4:]) for a in taken if a.startswith(prefix + "-")]
+    n = max(nums, default=0) + 1
+    if n > 999:
+        raise ImportError_(f"编号 {prefix}-xxx 已经用完了")
+    return f"{prefix}-{n:03d}"
+
+
 def location_paths(data):
     by_id = {l["id"]: l for l in data["locations"]}
 
@@ -180,6 +198,8 @@ def check(manifest, base_dir, data):
         try:
             asset = normalize_asset_id(item.get("assetId"))
             item["assetId"] = asset
+            # 没写编号：要贴标签的类别在写入时按类别自动给号（noLabel: true 可以跳过）
+            item["_auto"] = not asset and not item.get("noLabel") and needs_label(data, item.get("tags", []))
             if asset in used:
                 errors.append(f"{label}：编号 {asset} 已经被「{used[asset]}」用了")
             elif asset in seen:
@@ -237,6 +257,8 @@ def build_record(item, item_id, photo_entries, now):
         "purchasePrice": item.get("purchasePrice") if item.get("purchasePrice") not in ("", None) else None,
         "archived": False, "createdAt": now, "updatedAt": now,
     }
+    if rec["assetId"]:
+        rec["labelPrinted"] = False
     for key in TEXT_FIELDS:
         rec[key] = str(item.get(key) or "").strip()
     return rec
@@ -284,7 +306,8 @@ def main():
     for it in pending:
         kinds = [k for k, _ in it["_files"]]
         extra = f"，发票 {kinds.count('receipts')} 张" if "receipts" in kinds else ""
-        print(f"  {it.get('assetId') or '（无编号）':>10}  {it['name']}  →  {it['_paths'][it['_location']]}"
+        shown = it.get("assetId") or (f"{prefix_for(data, it.get('tags', []))}-自动" if it["_auto"] else "（无编号）")
+        print(f"  {shown:>10}  {it['name']}  →  {it['_paths'][it['_location']]}"
               f"  [{'、'.join(it.get('tags', []))}]  照片 {kinds.count('photos')} 张{extra}")
     if args.dry_run or not pending:
         return
@@ -313,6 +336,12 @@ def main():
     for attempt in range(4):
         head = gh.head()
         latest = gh.read_data(head)
+        assigned = []
+        for it, rec in records:
+            if it["_auto"]:
+                rec["assetId"] = next_in_prefix(latest, prefix_for(latest, rec["tags"]), assigned)
+                rec["labelPrinted"] = False
+                assigned.append(rec["assetId"])
         used = {x["assetId"]: x["name"] for x in latest["items"] + latest["locations"] if x.get("assetId")}
         clash = [f"{r['assetId']}（已被「{used[r['assetId']]}」用了）" for _, r in records if r["assetId"] in used]
         if clash:
@@ -327,8 +356,14 @@ def main():
                 raise
     for it, rec in records:
         it["id"] = rec["id"]
+        it["assetId"] = rec["assetId"]
     save_manifest(manifest_path, manifest)
     print(f"全部完成，共录入 {len(records)} 件。")
+    numbered = [(rec["assetId"], rec["name"]) for _, rec in records if rec["assetId"]]
+    if numbered:
+        print(f"其中 {len(numbered)} 件有编号，标签已加入「待打印」：")
+        for a, n in numbered:
+            print(f"  {a}  {n}")
 
 
 if __name__ == "__main__":

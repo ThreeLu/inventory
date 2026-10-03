@@ -8,6 +8,79 @@ const CACHE_KEY = 'inventory-cache';
 
 export const ASSET_MAX = 899999; // 标签编号范围 000-001 ~ 899-999
 
+// 编号前 3 位表示类别：物品按第一个标签，柜子等位置统一用 010，没有标签的物品用 000
+export const LOCATION_PREFIX = '010';
+export const UNTAGGED_PREFIX = '000';
+const RESERVED_PREFIXES = [UNTAGGED_PREFIX, LOCATION_PREFIX];
+const DEFAULT_UNLABELED = ['衣服', '运动服', '鞋'];
+
+// 补齐旧数据缺的字段（类别编号、不贴标签的类别、提醒天数）。每次读到数据都调用。
+export function migrate(data) {
+  data.tagCodes ||= {};
+  if (!data.unlabeledTags) data.unlabeledTags = DEFAULT_UNLABELED.filter((t) => data.tags.includes(t));
+  data.reminderDays ||= 30;
+  for (const tag of data.tags) if (!data.tagCodes[tag]) data.tagCodes[tag] = nextTagCode(data);
+  return data;
+}
+
+export function nextTagCode(data) {
+  const used = new Set([...RESERVED_PREFIXES, ...Object.values(data.tagCodes || {})]);
+  for (let n = 100; n <= 890; n += 10) {
+    const code = String(n).padStart(3, '0');
+    if (!used.has(code)) return code;
+  }
+  for (let n = 1; n <= 899; n++) {
+    const code = String(n).padStart(3, '0');
+    if (!used.has(code)) return code;
+  }
+  throw new Error('类别编号用完了');
+}
+
+// 这些标签的物品不贴标签（衣服、鞋……），按第一个标签判断
+export function needsLabel(data, tags) {
+  return !(tags.length && data.unlabeledTags.includes(tags[0]));
+}
+
+export function prefixForTags(data, tags) {
+  return tags.length ? data.tagCodes[tags[0]] || UNTAGGED_PREFIX : UNTAGGED_PREFIX;
+}
+
+// 这一类的下一个空号：100-001、100-002……
+export function nextAssetInPrefix(data, prefix) {
+  let max = 0;
+  for (const x of [...data.items, ...data.locations]) {
+    if (x.assetId && x.assetId.startsWith(`${prefix}-`)) max = Math.max(max, Number(x.assetId.slice(4)));
+  }
+  if (max >= 999) throw new Error(`编号 ${prefix}-xxx 已经用完了`);
+  return `${prefix}-${String(max + 1).padStart(3, '0')}`;
+}
+
+// 到期提醒：零食药品的「保质期」字段、电子产品的保修到期。返回 [{ item, kind, date, days }]，按剩余天数排序
+export function parseDate(text) {
+  const m = String(text || '').trim().match(/^(\d{4})[-/.年](\d{1,2})(?:[-/.月](\d{1,2}))?/);
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), m[3] ? Number(m[3]) : null];
+  return d ? new Date(y, mo - 1, d) : new Date(y, mo, 0); // 只写到月份时按月底算
+}
+
+export function reminders(data, days = data.reminderDays || 30) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const out = [];
+  for (const item of data.items) {
+    if (item.archived) continue;
+    const checks = [['保质期', item.fields?.['保质期']], ['保修', item.warrantyExpires]];
+    for (const [kind, text] of checks) {
+      const date = parseDate(text);
+      if (!date) continue;
+      const left = Math.round((date - today) / 86400000);
+      // 过期的食品药品一直提醒到归档为止；保修过期 30 天后就不再提
+      if (left <= days && (kind === '保质期' || left >= -30)) out.push({ item, kind, date: text, days: left });
+    }
+  }
+  return out.sort((a, b) => a.days - b.days);
+}
+
 export function normalizeAssetId(value) {
   if (value === null || value === undefined || String(value).trim() === '') return null;
   const digits = String(value).replace(/[\s-]/g, '');
@@ -34,7 +107,7 @@ export class Store {
     try {
       const cached = JSON.parse(localStorage.getItem(CACHE_KEY));
       if (cached && cached.repo === this.gh.repo) {
-        this.data = cached.data;
+        this.data = migrate(cached.data);
         this.head = cached.head;
         return true;
       }
@@ -51,7 +124,7 @@ export class Store {
   async load() {
     const head = await this.gh.headSha();
     if (head !== this.head || !this.data) {
-      this.data = JSON.parse(await this.gh.readText(DATA_FILE, head));
+      this.data = migrate(JSON.parse(await this.gh.readText(DATA_FILE, head)));
       this.head = head;
       this.writeCache();
     }
@@ -64,7 +137,7 @@ export class Store {
 
     for (let attempt = 0; attempt < 4; attempt++) {
       const head = await this.gh.headSha();
-      const base = head === this.head && this.data ? this.data : JSON.parse(await this.gh.readText(DATA_FILE, head));
+      const base = head === this.head && this.data ? this.data : migrate(JSON.parse(await this.gh.readText(DATA_FILE, head)));
       const next = structuredClone(base);
       const result = mutate(next);
       const changes = [
@@ -135,9 +208,12 @@ export class Store {
     return null;
   }
 
-  maxAssetNumber() {
-    const all = [...this.data.items, ...this.data.locations].map((x) => x.assetId).filter(Boolean);
-    return all.reduce((max, id) => Math.max(max, Number(id.replace('-', ''))), 0);
+  // 编号已定、标签还没打印的物品和位置
+  pendingLabels() {
+    return [
+      ...this.data.locations.filter((l) => l.assetId && l.labelPrinted === false).map((obj) => ({ type: 'location', obj })),
+      ...this.data.items.filter((i) => i.assetId && i.labelPrinted === false && !i.archived).map((obj) => ({ type: 'item', obj })),
+    ].sort((a, b) => a.obj.assetId.localeCompare(b.obj.assetId));
   }
 }
 
