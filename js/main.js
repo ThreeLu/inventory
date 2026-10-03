@@ -48,6 +48,8 @@ function boot() {
     render();
     refresh();
   } else {
+    // 还没登录：记住要去的页面（比如扫码的编号），登录后再跳过去
+    if (window.location.hash && window.location.hash !== '#/settings') sessionStorage.setItem('after-login', window.location.hash);
     go('#/settings', true);
   }
   // 从后台切回来时拉一次最新数据（比如在另一台设备上改过）
@@ -744,7 +746,9 @@ function settingsView() {
       await store.load();
     });
     toast('已连接');
-    go('#/', true);
+    const target = sessionStorage.getItem('after-login');
+    sessionStorage.removeItem('after-login');
+    go(target || '#/', true);
   };
   const logout = () => {
     if (!confirm('清除这台设备上保存的令牌和缓存？数据仓库里的数据不受影响。')) return;

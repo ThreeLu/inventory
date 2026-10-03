@@ -16,4 +16,7 @@ js/store.js         数据读写：inventory.json 的查询和修改
 js/github.js        GitHub API：读文件、一次提交多个文件
 js/util.js          建 DOM、图片压缩、照片缓存
 js/xlsx.js          生成批量标签用的 Excel
+tools/import_items.py   Mac 上批量录入（Claude Code 看照片 → 清单 → 写入数据仓库）
+.claude/skills/batch-import/  给 Claude Code 的批量录入流程
+CLAUDE.md           给 Claude Code 的开发说明
 ```
