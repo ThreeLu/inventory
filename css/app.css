@@ -326,3 +326,6 @@ nav .dot { position: absolute; top: 1px; right: -6px; width: 8px; height: 8px; b
 .bar { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
 .bar-num { font-variant-numeric: tabular-nums; text-align: right; }
 .bar-num small { color: var(--muted); }
+
+/* 详情卡片里「备注」标题和上面的字段拉开距离 */
+.card dl + h3 { margin-top: 16px; }
