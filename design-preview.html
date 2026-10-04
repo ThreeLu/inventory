@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>外观样稿</title>
+<style>
+  /* 样稿：无印良品的生成り底色 + 苹果的系统字体、分组列表、毛玻璃导航；主色藤紫 */
+  :root {
+    --bg: #f6f4ef; --surface: #ffffff; --surface-2: #efece5; --text: #2b2a28; --text-2: #7a766e;
+    --hair: rgba(60, 55, 45, 0.12); --accent: #7a68b0; --accent-soft: #eeeaf6; --accent-text: #fff;
+    --warn: #c0563f; --amber: #a97d2c; --sage: #6e8b6b; --shadow: 0 1px 2px rgba(60,55,45,.06), 0 6px 20px rgba(60,55,45,.06);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1b1a1d; --surface: #252428; --surface-2: #2f2d33; --text: #ecebe8; --text-2: #9c988f;
+      --hair: rgba(255,255,255,.1); --accent: #b4a6e3; --accent-soft: #312c40; --accent-text: #1b1a1d;
+      --warn: #e08a76; --amber: #d9b062; --sage: #9cb899; --shadow: none; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1b1a1d; --surface: #252428; --surface-2: #2f2d33; --text: #ecebe8; --text-2: #9c988f;
+    --hair: rgba(255,255,255,.1); --accent: #b4a6e3; --accent-soft: #312c40; --accent-text: #1b1a1d;
+    --warn: #e08a76; --amber: #d9b062; --sage: #9cb899; --shadow: none; color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  .intro { max-width: 1180px; margin: 0 auto; padding: 28px 16px 8px; }
+  .intro h1 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .intro p { color: var(--text-2); margin: 4px 0; font-size: 15px; }
+  .palette { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+  .sw { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); background: var(--surface); border-radius: 10px; padding: 6px 10px 6px 6px; box-shadow: var(--shadow); }
+  .sw i { width: 22px; height: 22px; border-radius: 6px; display: block; border: 1px solid var(--hair); }
+  .toggle { margin-top: 10px; font: inherit; font-size: 14px; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; }
+  .screens { max-width: 1180px; margin: 0 auto; padding: 12px 16px 48px; display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; }
+  .screen-wrap { width: 100%; max-width: 360px; }
+  .screen-wrap > h2 { font-size: 13px; font-weight: 600; color: var(--text-2); letter-spacing: .04em; margin: 0 0 8px 4px; }
+  .phone { position: relative; height: 740px; border-radius: 34px; background: var(--bg); overflow: hidden;
+    box-shadow: 0 0 0 1px var(--hair), 0 24px 60px rgba(40,35,30,.12); }
+  .scroll { height: 100%; overflow-y: auto; padding: 18px 16px 96px; scrollbar-width: none; }
+  .scroll::-webkit-scrollbar { display: none; }
+
+  /* 苹果式大标题 */
+  .top { display: flex; align-items: flex-start; justify-content: space-between; margin: 6px 2px 14px; }
+  .large { font-size: 32px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; margin: 0; }
+  .sub { color: var(--text-2); font-size: 14px; margin-top: 4px; }
+  .icon-btn { width: 36px; height: 36px; border-radius: 18px; background: var(--surface); display: grid; place-items: center; color: var(--accent); box-shadow: var(--shadow); }
+  .icons { display: flex; gap: 8px; }
+  svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+  .card { background: var(--surface); border-radius: 18px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px; }
+  .eyebrow { font-size: 12px; font-weight: 600; color: var(--accent); letter-spacing: .06em; }
+  .card h3 { font-size: 19px; margin: 2px 0 10px; letter-spacing: -0.01em; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chip { font-size: 13px; padding: 5px 11px; border-radius: 999px; background: var(--surface-2); color: var(--text); }
+  .chip.on { background: var(--accent); color: var(--accent-text); }
+  .outfit { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .garment { aspect-ratio: 3 / 4; border-radius: 12px; background: var(--surface-2); display: flex; align-items: flex-end; padding: 6px; font-size: 11px; color: var(--text-2); position: relative; overflow: hidden; }
+  .garment::before { content: ""; position: absolute; inset: 18% 22% 30%; border-radius: 10px; opacity: .9; }
+  .g1::before { background: #d9d2c3; } .g2::before { background: #3e3c44; } .g3::before { background: #8e8a7f; } .g4::before { background: #f2efe8; border: 1px solid var(--hair); }
+  .garment span { position: relative; }
+  .why { font-size: 14px; color: var(--text-2); margin: 10px 0 12px; }
+  .row-btns { display: flex; gap: 8px; }
+  .btn { flex: 1; text-align: center; font-size: 15px; font-weight: 600; padding: 11px; border-radius: 12px; background: var(--accent); color: var(--accent-text); }
+  .btn.soft { background: var(--accent-soft); color: var(--accent); }
+
+  .ask { display: flex; align-items: center; gap: 10px; background: var(--surface); border-radius: 14px; padding: 12px 14px; color: var(--text-2); box-shadow: var(--shadow); margin-bottom: 18px; font-size: 15px; }
+  .ask svg { color: var(--accent); }
+
+  .section { font-size: 13px; color: var(--text-2); margin: 0 6px 6px; }
+  .group { background: var(--surface); border-radius: 14px; overflow: hidden; box-shadow: var(--shadow); margin-bottom: 18px; }
+  .cell { display: flex; align-items: center; gap: 12px; padding: 12px 14px; font-size: 15px; }
+  .cell + .cell { border-top: 0.5px solid var(--hair); margin-left: 50px; padding-left: 0; }
+  .cell + .cell .dot { margin-left: -36px; }
+  .dot { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; color: #fff; flex: none; }
+  .dot svg { width: 15px; height: 15px; stroke-width: 2; }
+  .grow { flex: 1; }
+  .meta { color: var(--text-2); font-size: 14px; }
+  .chev { color: var(--text-2); opacity: .5; }
+
+  /* 毛玻璃底部导航 */
+  .tabbar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-around; padding: 8px 6px 22px;
+    background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: saturate(180%) blur(18px); -webkit-backdrop-filter: saturate(180%) blur(18px);
+    border-top: 0.5px solid var(--hair); }
+  .tab { display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10.5px; color: var(--text-2); width: 60px; }
+  .tab.on { color: var(--accent); }
+  .tab svg { width: 24px; height: 24px; }
+  .tab.plus .circle { width: 44px; height: 44px; border-radius: 22px; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; margin-top: -6px; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 40%, transparent); }
+
+  /* 物品：目录式照片网格 */
+  .search { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border-radius: 12px; padding: 9px 12px; color: var(--text-2); font-size: 15px; margin-bottom: 10px; }
+  .seg { display: flex; background: var(--surface-2); border-radius: 10px; padding: 2px; margin-bottom: 12px; }
+  .seg div { flex: 1; text-align: center; font-size: 13px; padding: 6px; border-radius: 8px; color: var(--text-2); }
+  .seg .on { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .tile .ph { aspect-ratio: 1; border-radius: 14px; background: var(--surface-2); position: relative; overflow: hidden; }
+  .tile .ph::before { content: ""; position: absolute; inset: 22%; border-radius: 12px; background: #d6cfe6; }
+  .tile:nth-child(2) .ph::before { background: #c9c3b6; } .tile:nth-child(3) .ph::before { background: #e3d9c6; }
+  .tile:nth-child(4) .ph::before { background: #d4dccf; } .tile:nth-child(5) .ph::before { background: #b9c4d3; }
+  .tile:nth-child(6) .ph::before { background: #dccbb8; }
+  .tile .name { font-size: 14px; font-weight: 600; margin: 6px 2px 0; }
+  .tile .info { font-size: 12px; color: var(--text-2); margin: 0 2px; display: flex; gap: 6px; align-items: center; }
+  .num { font: 600 11px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); background: var(--accent-soft); padding: 0 5px; border-radius: 5px; }
+  .badge { font-size: 10.5px; padding: 0 6px; border-radius: 5px; line-height: 1.7; }
+  .badge.amber { background: color-mix(in srgb, var(--amber) 16%, transparent); color: var(--amber); }
+
+  /* 衣橱 */
+  .tiles2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+  .mini { background: var(--surface); border-radius: 16px; padding: 14px; box-shadow: var(--shadow); }
+  .mini .big { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  .mini .lab { font-size: 13px; color: var(--text-2); }
+  .mini svg { color: var(--accent); margin-bottom: 6px; }
+  .note { max-width: 1180px; margin: 0 auto; padding: 0 16px 40px; color: var(--text-2); font-size: 14px; }
+  .note li { margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div class="intro">
+  <h1>外观样稿</h1>
+  <p>无印良品的生成り（米白）底色、留白和朴素配色，苹果的系统字体、大标题、分组列表和毛玻璃导航。主色：藤紫。</p>
+  <p>只是样稿，里面的东西都是示意，点了没反应。</p>
+  <div class="palette">
+    <div class="sw"><i style="background:#f6f4ef"></i>生成り底色</div>
+    <div class="sw"><i style="background:#ffffff"></i>卡片</div>
+    <div class="sw"><i style="background:#7a68b0"></i>藤紫（主色）</div>
+    <div class="sw"><i style="background:#eeeaf6"></i>淡紫</div>
+    <div class="sw"><i style="background:#2b2a28"></i>墨色文字</div>
+    <div class="sw"><i style="background:#6e8b6b"></i>苔绿（正常）</div>
+    <div class="sw"><i style="background:#a97d2c"></i>芥黄（快到期）</div>
+    <div class="sw"><i style="background:#c0563f"></i>赤陶（过期）</div>
+  </div>
+  <button class="toggle" onclick="const r=document.documentElement;r.dataset.theme=r.dataset.theme==='dark'?'light':'dark'">切换深色 / 浅色看看</button>
+</div>
+
+<div class="screens">
+  <!-- 首页：今天 -->
+  <div class="screen-wrap">
+    <h2>① 首页「今天」</h2>
+    <div class="phone"><div class="scroll">
+      <div class="top">
+        <div><h1 class="large">今天</h1><div class="sub">10月4日 周六 · 济南 12～21°C 晴</div></div>
+        <div class="icons">
+          <div class="icon-btn" title="扫码"><svg viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 12h8"/></svg></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="eyebrow">今天穿什么</div>
+        <h3>早晚凉，叠穿一件外套</h3>
+        <div class="chips"><span class="chip on">上课</span><span class="chip">运动</span><span class="chip">约会</span><span class="chip">见客户</span><span class="chip">宅宿舍</span></div>
+        <div class="outfit">
+          <div class="garment g1"><span>米色卫衣</span></div>
+          <div class="garment g2"><span>深灰长裤</span></div>
+          <div class="garment g3"><span>灰夹克</span></div>
+          <div class="garment g4"><span>白球鞋</span></div>
+        </div>
+        <div class="why">早上 12°C，中午 21°C。米色和深灰好搭，夹克中午可以脱下来拿着。</div>
+        <div class="row-btns"><div class="btn">就穿这套</div><div class="btn soft">换一套</div></div>
+      </div>
+      <div class="ask"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12Z"/></svg>问问你的物品……</div>
+      <div class="section">需要注意</div>
+      <div class="group">
+        <div class="cell"><div class="dot" style="background:var(--amber)"><svg viewBox="0 0 24 24"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="8"/></svg></div><div class="grow">2 件快过期</div><div class="meta">奥司他韦…</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:var(--accent)"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z"/></svg></div><div class="grow">16 张标签待打印</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:var(--sage)"><svg viewBox="0 0 24 24"><path d="M4 19V6a2 2 0 0 1 2-2h12v15H6a2 2 0 0 0-2 2Z"/></svg></div><div class="grow">《线性代数》借出 32 天</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+      </div>
+      <div class="section">本周</div>
+      <div class="group">
+        <div class="cell"><div class="dot" style="background:#9a8c7a"><svg viewBox="0 0 24 24"><path d="M6 6h15l-2 9H8L6 3H3M9 20h.01M18 20h.01"/></svg></div><div class="grow">购物清单</div><div class="meta">5 样</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+      </div>
+    </div>
+    <div class="tabbar">
+      <div class="tab on"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>今天</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>物品</div>
+      <div class="tab plus"><div class="circle"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div></div>
+      <div class="tab"><svg viewBox="0 0 24 24"><path d="M9 4 4 7l2 4 2-1v10h8V10l2 1 2-4-5-3a3 3 0 0 1-6 0Z"/></svg>衣橱</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>我的</div>
+    </div></div>
+  </div>
+
+  <!-- 物品：目录式 -->
+  <div class="screen-wrap">
+    <h2>② 物品（像商品目录）</h2>
+    <div class="phone"><div class="scroll">
+      <div class="top"><h1 class="large">物品</h1>
+        <div class="icons"><div class="icon-btn"><svg viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 12h8"/></svg></div></div></div>
+      <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg>搜索名称、编号、品牌</div>
+      <div class="seg"><div class="on">按类别</div><div>按位置</div><div>列表</div></div>
+      <div class="chips"><span class="chip on">全部 18</span><span class="chip">药品 13</span><span class="chip">日用 3</span><span class="chip">钥匙 1</span></div>
+      <div class="grid">
+        <div class="tile"><div class="ph"></div><div class="name">口琴（Easttop）</div><div class="info"><span class="num">270-0003</span><span class="badge amber">待打印</span></div></div>
+        <div class="tile"><div class="ph"></div><div class="name">水果刀（张小泉）</div><div class="info"><span class="num">270-0005</span>书桌</div></div>
+        <div class="tile"><div class="ph"></div><div class="name">布洛芬片</div><div class="info"><span class="num">290-0003</span>囤货柜</div></div>
+        <div class="tile"><div class="ph"></div><div class="name">2026年日历</div><div class="info"><span class="num">270-0001</span>书桌</div></div>
+        <div class="tile"><div class="ph"></div><div class="name">蚊香液</div><div class="info"><span class="num">270-0004</span>储物间</div></div>
+        <div class="tile"><div class="ph"></div><div class="name">钥匙链</div><div class="info"><span class="num">210-0001</span>主屋</div></div>
+      </div>
+    </div>
+    <div class="tabbar">
+      <div class="tab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>今天</div>
+      <div class="tab on"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>物品</div>
+      <div class="tab plus"><div class="circle"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div></div>
+      <div class="tab"><svg viewBox="0 0 24 24"><path d="M9 4 4 7l2 4 2-1v10h8V10l2 1 2-4-5-3a3 3 0 0 1-6 0Z"/></svg>衣橱</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>我的</div>
+    </div></div>
+  </div>
+
+  <!-- 衣橱 -->
+  <div class="screen-wrap">
+    <h2>③ 衣橱（穿搭、洗衣、出差、换季）</h2>
+    <div class="phone"><div class="scroll">
+      <div class="top"><h1 class="large">衣橱</h1></div>
+      <div class="tiles2">
+        <div class="mini"><svg viewBox="0 0 24 24"><path d="M9 4 4 7l2 4 2-1v10h8V10l2 1 2-4-5-3a3 3 0 0 1-6 0Z"/></svg><div class="big">42</div><div class="lab">件衣服 · 6 双鞋</div></div>
+        <div class="mini"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="13" r="4"/><path d="M8 6h.01M11 6h.01"/></svg><div class="big">3</div><div class="lab">件在洗</div></div>
+      </div>
+      <div class="section">穿搭</div>
+      <div class="group">
+        <div class="cell"><div class="dot" style="background:var(--accent)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg></div><div class="grow">今天穿什么</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:#9a8c7a"><svg viewBox="0 0 24 24"><path d="M8 3v4M16 3v4M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"/></svg></div><div class="grow">穿着记录</div><div class="meta">本周 5 天</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:var(--sage)"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="13" r="4"/></svg></div><div class="grow">洗衣篮</div><div class="meta">3 件</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+      </div>
+      <div class="section">出门和换季</div>
+      <div class="group">
+        <div class="cell"><div class="dot" style="background:#5f7fa8"><svg viewBox="0 0 24 24"><rect x="5" y="7" width="14" height="13" rx="2"/><path d="M9 7V4h6v3M9 20v1M15 20v1"/></svg></div><div class="grow">出差 / 旅行</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:var(--amber)"><svg viewBox="0 0 24 24"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg></div><div class="grow">换季整理</div><div class="meta">下次：寒露 10/8</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+      </div>
+    </div>
+    <div class="tabbar">
+      <div class="tab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>今天</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>物品</div>
+      <div class="tab plus"><div class="circle"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div></div>
+      <div class="tab on"><svg viewBox="0 0 24 24"><path d="M9 4 4 7l2 4 2-1v10h8V10l2 1 2-4-5-3a3 3 0 0 1-6 0Z"/></svg>衣橱</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>我的</div>
+    </div></div>
+  </div>
+
+  <!-- 我的 -->
+  <div class="screen-wrap">
+    <h2>④ 我的（不常用的都收在这里）</h2>
+    <div class="phone"><div class="scroll">
+      <div class="top"><h1 class="large">我的</h1></div>
+      <div class="group">
+        <div class="cell"><div class="dot" style="background:var(--accent)"><svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z"/></svg></div><div class="grow">标签打印</div><div class="meta">待打印 16</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:#9a8c7a"><svg viewBox="0 0 24 24"><path d="M6 6h15l-2 9H8L6 3H3"/></svg></div><div class="grow">购物清单</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:var(--sage)"><svg viewBox="0 0 24 24"><path d="M4 19V6a2 2 0 0 1 2-2h12v15H6a2 2 0 0 0-2 2Z"/></svg></div><div class="grow">借出</div><div class="meta">1</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:#b98a5e"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4ZM3 7v10l9 4 9-4V7"/></svg></div><div class="grow">装箱 / 搬家</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+      </div>
+      <div class="group">
+        <div class="cell"><div class="dot" style="background:#5f7fa8"><svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></div><div class="grow">统计</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:var(--amber)"><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></div><div class="grow">断舍离建议</div><div class="meta">每季度</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:var(--warn)"><svg viewBox="0 0 24 24"><path d="M12 7v5l3 2"/><circle cx="12" cy="12" r="8"/></svg></div><div class="grow">到期提醒</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+      </div>
+      <div class="group">
+        <div class="cell"><div class="dot" style="background:#8a8680"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h7"/></svg></div><div class="grow">管理位置和类别</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+        <div class="cell"><div class="dot" style="background:#8a8680"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg></div><div class="grow">设置</div><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+      </div>
+    </div>
+    <div class="tabbar">
+      <div class="tab"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>今天</div>
+      <div class="tab"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>物品</div>
+      <div class="tab plus"><div class="circle"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div></div>
+      <div class="tab"><svg viewBox="0 0 24 24"><path d="M9 4 4 7l2 4 2-1v10h8V10l2 1 2-4-5-3a3 3 0 0 1-6 0Z"/></svg>衣橱</div>
+      <div class="tab on"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>我的</div>
+    </div></div>
+  </div>
+</div>
+<div class="note">
+  <ul>
+    <li>中间的「＋」点开是一个小菜单：新建物品 / 扫码 / 问一问。扫码在「今天」和「物品」右上角也有。</li>
+    <li>「位置」并进了「物品」里（按类别 / 按位置 / 列表 三种看法）。</li>
+    <li>样稿里的衣服是色块示意，正式版用你拍的照片。</li>
+  </ul>
+</div>
+</body>
+</html>
