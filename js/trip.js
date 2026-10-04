@@ -2,6 +2,7 @@
 // 发给 DeepSeek 的只有物品的名称、类别、字段（季节、颜色、尺码……），不发照片、价格、序列号、备注。
 
 import { isDepleted, isBox } from './store.js';
+import { askJson } from './ai.js';
 
 export const PURPOSES = ['出差开会', '见客户', '面试', '旅游', '回家', '运动户外', '探亲访友'];
 
@@ -69,7 +70,7 @@ export function summarizeWeather(w) {
 // ---------- 候选物品 ----------
 
 export function candidates(data) {
-  return data.items.filter((i) => !i.archived && !isDepleted(i) && !i.loan && !isBox(data, i.location)
+  return data.items.filter((i) => !i.archived && !isDepleted(i) && !i.loan && !i.borrow && !isBox(data, i.location)
     && !(i.tags[0] && SKIP_TAGS.includes(i.tags[0])));
 }
 
@@ -175,35 +176,7 @@ export async function aiPlan(data, trip, weather, base, { key, model }) {
     '只输出 JSON：{"items":[{"id":"","qty":1,"reason":""}],"outfits":[{"day":"10-10","items":["id"],"note":""}],"missing":[{"name":"","reason":""}],"tips":[""]}',
   ].join('\n');
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 150000); // 会先思考再回答的模型（如 deepseek-flash）比较慢
-  let res;
-  try {
-    res = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST', signal: ctrl.signal,
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: model || 'deepseek-flash',
-        messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-        temperature: 0.6,
-        // 思考过程也算在这个上限里；给少了正文会被截断
-        max_tokens: 8000,
-      }),
-    });
-  } catch (e) {
-    throw new Error(e.name === 'AbortError' ? 'DeepSeek 太久没响应' : '连不上 DeepSeek');
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!res.ok) {
-    const msg = { 401: 'DeepSeek 密钥不对', 402: 'DeepSeek 余额不足', 429: 'DeepSeek 请求太频繁' }[res.status];
-    throw new Error(msg || `DeepSeek 返回 ${res.status}`);
-  }
-  const choice = (await res.json()).choices?.[0];
-  if (choice?.finish_reason === 'length') throw new Error('DeepSeek 想得太久，回答被截断了');
-  let out;
-  try { out = JSON.parse(choice.message.content); } catch { throw new Error('DeepSeek 的回答格式不对'); }
+  const out = await askJson({ key, model }, system, prompt);
   // 只保留真实存在的物品 id，防止 AI 编造
   const valid = new Set(pool.map((i) => i.id));
   const seen = new Set();

@@ -36,6 +36,15 @@ export function migrate(data) {
     if (item.consumable === undefined) item.consumable = defaultConsumable(data, item.tags);
   }
   data.trips ||= [];
+  data.prefs ||= {};
+  // 衣服加上部位、厚薄、风格（今天穿什么靠这些搭配）
+  const want = { 衣服: ['部位', '季节', '厚薄', '风格', '颜色', '尺码'], 运动服: ['部位', '季节', '厚薄', '颜色', '尺码'], 鞋: ['季节', '风格', '颜色', '尺码'] };
+  data.fieldPresets ||= {};
+  for (const [tag, keys] of Object.entries(want)) {
+    if (!data.tags.includes(tag)) continue;
+    const have = data.fieldPresets[tag] || [];
+    data.fieldPresets[tag] = [...have, ...keys.filter((k) => !have.includes(k))];
+  }
   // 旧版用 labelPrinted 布尔值，现在是 label: 'none' | 'pending' | 'printed'；旧版编号后段 3 位，现在 4 位
   for (const x of [...data.items, ...data.locations]) {
     if (x.assetId && /^\d{3}-\d{3}$/.test(x.assetId)) x.assetId = `${x.assetId.slice(0, 4)}0${x.assetId.slice(4)}`;
@@ -97,14 +106,13 @@ export function moveItem(data, item, target) {
   item.updatedAt = new Date().toISOString();
 }
 
-// 借出：超过约定日期，或者没约定但借出超过 30 天，就提醒
-export function loanStatus(item, today = new Date()) {
-  if (!item.loan) return null;
+// 借阅（从图书馆借来的书）：item.borrow = { from, date, due, renewals }。还书前 3 天开始提醒
+export const BORROW_REMIND_DAYS = 3;
+export function borrowStatus(item, today = new Date()) {
+  if (!item.borrow || item.archived) return null;
   const t0 = new Date(today); t0.setHours(0, 0, 0, 0);
-  const since = Math.round((t0 - parseDate(item.loan.date)) / 86400000);
-  const due = item.loan.due ? Math.round((parseDate(item.loan.due) - t0) / 86400000) : null;
-  const overdue = due !== null ? due < 0 : since > 30;
-  return { since, due, overdue };
+  const left = Math.round((parseDate(item.borrow.due) - t0) / 86400000);
+  return { left, overdue: left < 0, soon: left <= BORROW_REMIND_DAYS };
 }
 
 // 消耗品数量为 0 就是「用完了」，等着补货
