@@ -61,6 +61,9 @@ def seed():
         I("itb", "牙刷", "洗漱护肤", "Lstore", "150-001", labelPrinted=False),
         I("imed", "布洛芬片", "药品急救", "Lbulk", "290-001", quantity=2, fields={"保质期": "2027-11-20"}, labelPrinted=False),
         I("ibook", "线性代数（第六版）", "书籍资料", "Ldrawer", "190-001", labelPrinted=False),
+        I("isock", "黑袜子", "衣服", "Lward", "110-005", quantity=6, fields={"部位": "袜子"}, label="none",
+          laundry={"state": "washing", "since": D(-1), "autoReturn": D(0)}),
+        I("isheet", "灰色床单", "床上用品", "Lstore", "170-001", label="none", lastWashed=D(-20)),
         I("icold1", "999感冒灵颗粒", "药品急救", "Lbulk", "290-002", label="none"),
         I("icold2", "感康（复方氨酚烷胺片）", "药品急救", "Lbulk", "290-003", label="none"),
     ]
@@ -141,7 +144,7 @@ def _(c):
     expect(p.get_by_role("heading", name="今天")).to_be_visible()
     expect(p.get_by_text("GitHub 令牌还有")).to_be_visible()
     c.go("#/items")
-    expect(p.get_by_text("11 件")).to_be_visible()
+    expect(p.get_by_text("13 件")).to_be_visible()
     expect(p.locator(".tile", has_text="布洛芬片").locator(".asset")).to_have_text("290-0001")
     p.get_by_role("button", name="列表").click()
     expect(p.locator(".row", has_text="布洛芬片")).to_be_visible()
@@ -174,7 +177,7 @@ def _(c):
     assert "外部标签" in c.data()["tags"], "覆盖了别处的修改"
     c.go("#/new")
     p.get_by_role("button", name="衣服", exact=True).click()
-    expect(p.get_by_role("textbox", name="编号")).to_have_value("110-0004")
+    expect(p.get_by_role("textbox", name="编号")).to_have_value("110-0006")
     expect(p.locator(".switch-row input").first).not_to_be_checked()
     # 只能选一个类别：再点别的就换成别的
     p.get_by_role("button", name="文具", exact=True).click()
@@ -421,6 +424,39 @@ def _(c):
     assert c.item("牙刷")["quantity"] == 0
 
 
+@step("洗衣篮：今天穿的要洗吗、分批、开洗、收好了；贴身衣物自动收回；床单定期洗")
+def _(c):
+    p = c.page
+    c.go("#/wardrobe")
+    p.get_by_text("洗衣篮").click()
+    card = p.locator(".card", has_text="要洗吗")
+    expect(card.locator(".check-row", has_text="灰色卫衣").locator("input")).to_be_checked()      # 上衣穿 1 次就洗
+    expect(card.locator(".check-row", has_text="黑色羽绒服").locator("input")).not_to_be_checked()  # 外套 5 次才洗
+    expect(card.locator(".check-row", has_text="运动鞋")).to_have_count(0)                         # 鞋不进洗衣篮
+    card.get_by_role("button", name="放进洗衣篮").click()
+    expect(p.get_by_text("要洗吗")).to_have_count(0)
+    d = c.data()
+    assert d["prefs"]["laundryAsked"] and next(i for i in d["items"] if i["id"] == "iw3")["laundry"]["state"] == "dirty"
+    sock = next(i for i in d["items"] if i["id"] == "isock")
+    assert "laundry" not in sock, f"贴身衣物没自动收回：{sock}"
+    expect(p.locator(".group-title", has_text="深色")).to_be_visible()                               # 灰色归深色一批
+    expect(p.locator(".section-title", has_text="床上用品该洗了")).to_be_visible()
+    c.go(f"#/item/{c.item('黑色羽绒服')['id']}")
+    p.get_by_role("button", name="放进洗衣篮").click()
+    expect(p.get_by_text("在洗衣篮里")).to_be_visible()
+    c.go("#/laundry")
+    expect(p.locator(".group-title", has_text="单独洗或送洗")).to_be_visible()                       # 羽绒服单独洗
+    p.get_by_role("button", name="开洗勾选的").click()
+    expect(p.locator(".section-title", has_text="在洗 / 在晾（2）")).to_be_visible()
+    assert not any(i["id"] == "iw3" for i in __import__("json").loads(c.repo.read("inventory.json"))["items"] if not i.get("laundry")), "卫衣应该在洗"
+    p.get_by_role("button", name="收好了").click()
+    expect(p.locator(".section-title", has_text="在洗 / 在晾")).to_have_count(0)
+    w = c.item("灰色卫衣")
+    assert "laundry" not in w and w["wearsSinceWash"] == 0 and w["lastWashed"], w
+    c.go("#/settings")
+    expect(p.locator(".card", has_text="手机提醒")).to_be_visible()
+
+
 @step("AI 补全：只填名称，推荐类别和字段")
 def _(c):
     p = c.page
@@ -434,7 +470,7 @@ def _(c):
     p.locator(".ai-suggest").get_by_role("button", name="采用").click()
     expect(p.get_by_role("button", name="衣服", exact=True)).to_have_class("chip on")
     expect(p.locator(".field-row select").first).to_have_value("外套")
-    expect(p.get_by_role("textbox", name="编号")).to_have_value("110-0004")
+    expect(p.get_by_role("textbox", name="编号")).to_have_value("110-0006")
 
 
 @step("换季整理：列出该收起来的，按勾选移动")
@@ -487,7 +523,7 @@ def _(c):
     assert out.returncode == 0, out.stdout + out.stderr
     d = c.data()
     got = {i["name"]: (i["assetId"], i["label"], i["consumable"]) for i in d["items"] if i["name"] in ("数据线", "条纹衬衫", "薯片")}
-    assert got == {"数据线": ("100-0005", "pending", False), "条纹衬衫": ("110-0004", "none", False),
+    assert got == {"数据线": ("100-0005", "pending", False), "条纹衬衫": ("110-0006", "none", False),
                    "薯片": ("280-0001", "pending", True)}, got
 
 

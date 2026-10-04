@@ -2,7 +2,8 @@ import { GitHub } from './github.js';
 import {
   Store, normalizeAssetId, newId, assertAssetFree, LOCATION_PREFIX,
   defaultLabel, setLabel, LABEL_TEXT, prefixForTags, defaultConsumable, isDepleted, ARCHIVE_REASONS,
-  isBox, moveItem, borrowStatus, nextAssetInPrefix, nextTagCode, reminders,
+  isBox, moveItem, borrowStatus,
+  INTIMATE_PARTS, laundryPrefs, laundryStatus, laundryBatches, localDay, nextAssetInPrefix, nextTagCode, reminders,
 } from './store.js';
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
 import { makeXlsx } from './xlsx.js';
@@ -10,6 +11,7 @@ import { icon } from './icons.js';
 import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr } from './outfit.js';
 import { seasonPlan, storageFor, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
+import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
 import { startScanner, assetFromScan } from './scan.js';
 import { PURPOSES, geocode, weatherFor, summarizeWeather, rulePlan, aiPlan } from './trip.js';
 
@@ -136,6 +138,7 @@ const routes = [
   [/^\/trip\/([^/]+)$/, (id) => tripPlanView(id)],
   [/^\/outfit$/, () => outfitView()],
   [/^\/wear$/, () => wearView()],
+  [/^\/laundry$/, () => laundryView()],
   [/^\/season$/, () => seasonView()],
   [/^\/ask$/, () => chatView()],
   [/^\/stats$/, () => statsView()],
@@ -147,7 +150,7 @@ const routes = [
 const NAV_GROUPS = {
   '/': [/^\/?$/, /^\/ask/],
   '/items': [/^\/items/, /^\/places?/, /^\/item\//, /^\/new/, /^\/a\//, /^\/scan/],
-  '/wardrobe': [/^\/wardrobe/, /^\/outfit/, /^\/wear/, /^\/trips?/, /^\/season/],
+  '/wardrobe': [/^\/wardrobe/, /^\/outfit/, /^\/wear/, /^\/laundry/, /^\/trips?/, /^\/season/],
   '/me': [/^\/me/, /^\/more/, /^\/labels/, /^\/restock/, /^\/reminders/, /^\/stats/, /^\/manage/, /^\/settings/, /^\/boxes/, /^\/borrow/, /^\/loans/],
 };
 
@@ -575,6 +578,7 @@ function itemView(id) {
   return h('div', {},
     item.archived ? h('div', { class: 'banner' }, `已归档${item.archiveReason ? `：${item.archiveReason}` : ''}${item.archivedAt ? `（${item.archivedAt}）` : ''}`) : null,
     isDepleted(item) && !item.archived ? h('div', { class: 'banner warn' }, '已用完，等补货') : null,
+    item.laundry && !item.archived ? h('div', { class: 'banner' }, item.laundry.autoReturn ? '贴身衣物，今天在洗，明天自动收回' : `${LAUNDRY_TEXT[item.laundry.state]}（${item.laundry.since.slice(5)} 起）`) : null,
     bs ? h('div', { class: `banner ${bs.overdue ? 'warn' : bs.soon ? 'soon' : ''}` },
       `借自${item.borrow.from}，${item.borrow.due} 前还`, bs.overdue ? `，已逾期 ${-bs.left} 天` : `，还剩 ${bs.left} 天`) : null,
     item.homeLocation && isBox(store.data, item.location) ? h('div', { class: 'banner' },
@@ -610,6 +614,10 @@ function itemView(id) {
       ] : null,
       item.archived ? null : labelButtons('item', item),
       bs ? [h('button', { onclick: giveBack }, '已归还'), h('button', { class: 'secondary', onclick: renew }, '续借')] : null,
+      !item.archived && canWash(item) ? (
+        !item.laundry ? h('button', { class: 'secondary', onclick: () => setLaundry([id], 'dirty', `放进洗衣篮：${item.name}`) }, '放进洗衣篮')
+          : item.laundry.state === 'dirty' ? h('button', { class: 'secondary', onclick: () => setLaundry([id], 'washing', `开洗：${item.name}`) }, '开洗')
+            : h('button', { class: 'secondary', onclick: () => setLaundry([id], null, `收好了：${item.name}`) }, '收好了')) : null,
       h('button', { class: 'secondary', onclick: copy }, '复制'),
       item.archived
         ? h('button', { class: 'secondary', onclick: unarchive }, '取消归档')
@@ -1240,6 +1248,13 @@ function notices() {
     const left = Math.round((new Date(settings.tokenExpires) - new Date()) / 86400000);
     if (left <= 14) out.push({ href: '#/settings', ic: 'gear', color: 'var(--danger)', title: left < 0 ? 'GitHub 令牌已经过期' : `GitHub 令牌还有 ${left} 天过期` });
   }
+  const t = tonight();
+  if (t.items.length && !t.answered && new Date().getHours() >= 20) {
+    out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--accent)', title: '今天穿的要洗吗？', meta: `${t.items.length} 件` });
+  }
+  const ls = laundryStatus(store.data);
+  if (ls.due) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--amber)', title: '该洗衣服了', meta: `篮子里 ${ls.dirty.length} 件` });
+  if (ls.bedding.length) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--amber)', title: '床上用品该洗了', meta: ls.bedding[0].item.name });
   const due = reminders(store.data);
   if (due.length) out.push({ href: '#/reminders', ic: 'clock', color: 'var(--amber)', title: `${due.length} 件快过期`, meta: due[0].item.name });
   const books = store.data.items.filter((i) => borrowStatus(i)?.soon);
@@ -1323,7 +1338,7 @@ async function wearOption(option) {
   await saving('正在记录…', () => store.save(`今天穿：${option.items.map((id) => store.item(id)?.name).join('、')}`, (data) => {
     for (const it of data.items) {
       if (!option.items.includes(it.id)) continue;
-      it.worn = [...new Set([...(it.worn || []), day])].slice(-90);
+      markWorn(it, day);
     }
     if (data.outfit?.date === day) data.outfit.chosen = data.outfit.options.findIndex((o) => o === option || o.title === option.title);
   })).catch(() => {});
@@ -1400,6 +1415,100 @@ function outfitView() {
         h('p', { class: 'why' }, opt.why, opt.tips?.length ? h('span', { class: 'block' }, `💡 ${opt.tips.join('；')}`) : null),
         o.chosen === i ? null : h('button', { class: 'secondary wide', onclick: () => wearOption(opt) }, '就穿这套'))),
     ] : null);
+}
+
+// 记一次穿着：同一天只算一次；贴身衣物当天进「在洗」，第二天自动收回原处
+function markWorn(it, day) {
+  if ((it.worn || []).includes(day)) return;
+  it.worn = [...(it.worn || []), day].slice(-90);
+  it.wearsSinceWash = (it.wearsSinceWash || 0) + 1;
+  if (INTIMATE_PARTS.includes(it.fields?.['部位'])) it.laundry = { state: 'washing', since: day, autoReturn: localDay(1) };
+}
+
+// ---------- 洗衣篮 ----------
+
+const LAUNDRY_TEXT = { dirty: '在洗衣篮里', washing: '在洗 / 在晾' };
+const LAUNDRY_DEFAULTS_UI = { 上衣: 1, 连衣裙: 1, 下装: 3, 外套: 5, count: 8, days: 4, bedding: 14 };
+const canWash = (it) => ['衣服', '运动服', '床上用品'].includes(it.tags[0]) && !INTIMATE_PARTS.includes(it.fields?.['部位']);
+
+function setLaundry(ids, state, message) {
+  return saving('正在保存…', () => store.save(message, (data) => {
+    for (const it of data.items) {
+      if (!ids.includes(it.id)) continue;
+      if (state) {
+        it.laundry = { state, since: state === it.laundry?.state ? it.laundry.since : localDay() };
+      } else {
+        delete it.laundry;
+        it.wearsSinceWash = 0;
+        it.lastWashed = localDay();
+      }
+    }
+  })).then(render).catch(() => {});
+}
+
+// 今天穿过、还没处理的衣服（晚上问「要洗吗」）
+function tonight() {
+  const day = localDay();
+  const items = store.data.items.filter((i) => !i.archived && (i.worn || []).includes(day) && !i.laundry && canWash(i));
+  return { day, items, answered: store.data.prefs?.laundryAsked === day };
+}
+
+function shouldWash(it) {
+  const p = laundryPrefs(store.data);
+  return (it.wearsSinceWash || 0) >= (p[partOf(it)] ?? 99);
+}
+
+function laundryView() {
+  const st = laundryStatus(store.data);
+  const t = tonight();
+  const p = laundryPrefs(store.data);
+  const picked = new Set(t.items.filter(shouldWash).map((i) => i.id));
+  const checkRow = (it, set, meta) => h('label', { class: 'check-row' },
+    h('input', { type: 'checkbox', checked: set.has(it.id), onchange: (e) => { if (e.target.checked) set.add(it.id); else set.delete(it.id); } }),
+    h('span', { class: 'grow' }, it.name, h('span', { class: 'muted small block' }, meta)));
+  const answer = (ids) => saving('正在保存…', () => store.save(`今晚：${ids.length ? `${ids.length} 件放进洗衣篮` : '都不洗'}`, (data) => {
+    for (const it of data.items) if (ids.includes(it.id)) it.laundry = { state: 'dirty', since: localDay() };
+    data.prefs = { ...data.prefs, laundryAsked: t.day };
+  })).then(render).catch(() => {});
+
+  const selDirty = new Set(st.dirty.map((i) => i.id));
+  const selWash = new Set(st.washing.map((i) => i.id));
+  const editRules = () => {
+    const inputs = Object.fromEntries(['上衣', '下装', '外套', '连衣裙', 'count', 'days', 'bedding'].map((k) => [k, h('input', { type: 'number', min: 1, value: p[k] })]));
+    const labels = { 上衣: '上衣穿几次洗', 下装: '裤子穿几次洗', 外套: '外套穿几次洗', 连衣裙: '连衣裙穿几次洗', count: '篮子里攒几件提醒', days: '最早一件放几天提醒', bedding: '床上用品几天洗一次' };
+    openSheet({
+      title: '洗衣设置',
+      body: h('div', { class: 'form' }, Object.entries(inputs).map(([k, el]) => h('label', {}, labels[k], el))),
+      confirmText: '保存',
+      onConfirm: () => saving('正在保存…', () => store.save('洗衣设置', (data) => {
+        data.prefs = { ...data.prefs, laundry: Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, Math.max(1, Number(el.value) || LAUNDRY_DEFAULTS_UI[k])])) };
+      })).then(render).catch(() => {}),
+    });
+  };
+
+  return h('div', {},
+    header('洗衣篮', h('button', { class: 'icon-btn', 'aria-label': '洗衣设置', onclick: editRules }, icon('gear'))),
+    t.items.length && !t.answered ? h('div', { class: 'card' },
+      h('div', { class: 'eyebrow' }, '今天穿的'),
+      h('h3', {}, '要洗吗？勾上的放进洗衣篮'),
+      t.items.map((it) => checkRow(it, picked, `${partOf(it)} · 洗后穿了 ${it.wearsSinceWash || 1} 次`)),
+      h('div', { class: 'row-btns', style: 'margin-top:12px' },
+        h('button', { onclick: () => answer([...picked]) }, '放进洗衣篮'),
+        h('button', { class: 'secondary', onclick: () => answer([]) }, '都不洗'))) : null,
+    st.due ? h('div', { class: 'banner soon' }, `该洗衣服了：篮子里 ${st.dirty.length} 件，最早一件放了 ${st.oldest} 天`) : null,
+    h('div', { class: 'section-title' }, `待洗（${st.dirty.length}）`),
+    st.dirty.length ? h('div', { class: 'card' },
+      laundryBatches(st.dirty).map(([name, xs]) => [h('div', { class: 'group-title' }, name),
+        xs.map((it) => checkRow(it, selDirty, `放进来 ${Math.max(0, Math.floor((new Date(localDay()) - new Date(it.laundry.since)) / 86400000))} 天`))]),
+      h('div', { class: 'actions', style: 'margin-top:12px' },
+        h('button', { onclick: () => setLaundry([...selDirty], 'washing', `开洗：${selDirty.size} 件`) }, '开洗勾选的'))) : h('p', { class: 'muted small' }, '洗衣篮是空的。'),
+    st.washing.length ? [h('div', { class: 'section-title' }, `在洗 / 在晾（${st.washing.length}）`),
+      h('div', { class: 'card' }, st.washing.map((it) => checkRow(it, selWash, `${it.laundry.since.slice(5)} 开洗 · 收好后回到${store.shortName(it.location)}`)),
+        h('div', { class: 'actions', style: 'margin-top:12px' },
+          h('button', { onclick: () => setLaundry([...selWash], null, `收好了：${selWash.size} 件`) }, '收好了')))] : null,
+    st.bedding.length ? [h('div', { class: 'section-title' }, '床上用品该洗了'),
+      h('div', { class: 'list' }, st.bedding.map((b) => itemRow(b.item, h('span', { class: 'soon' }, `${b.days} 天没洗`))))] : null,
+    h('p', { class: 'muted small' }, `内衣、袜子每天洗，第二天自动收回，不用在这里处理。床上用品每 ${p.bedding} 天提醒一次。`));
 }
 
 // ---------- 穿着记录 ----------
@@ -1494,7 +1603,7 @@ function applyAction(data, a) {
     case 'renew': note(`续借，应还日期 ${it.borrow.due} → ${a.due}`); it.borrow = { ...it.borrow, due: a.due, renewals: (it.borrow.renewals || 0) + 1 }; break;
     case 'set_field': it.fields = { ...it.fields, [a.field]: String(a.value) }; break;
     case 'wear':
-      for (const x of data.items) if (a.ids.includes(x.id)) x.worn = [...new Set([...(x.worn || []), todayStr()])].slice(-90);
+      for (const x of data.items) if (a.ids.includes(x.id)) markWorn(x, todayStr());
       return;
     default: return;
   }
@@ -1611,7 +1720,10 @@ function wardrobeView() {
     h('div', { class: 'section-title' }, '穿搭'),
     h('div', { class: 'group' },
       cell({ href: '#/outfit', ic: 'today', title: '今天穿什么' }),
-      cell({ href: '#/wear', ic: 'calendar', color: '#9a8c7a', title: '穿着记录' })),
+      cell({ href: '#/wear', ic: 'calendar', color: '#9a8c7a', title: '穿着记录' }),
+      cell({ href: '#/laundry', ic: 'wardrobe', color: 'var(--sage)', title: '洗衣篮',
+        meta: (() => { const ls = laundryStatus(store.data); return ls.dirty.length || ls.washing.length ? `待洗 ${ls.dirty.length} · 在洗 ${ls.washing.length}` : ''; })(),
+        count: laundryStatus(store.data).due ? '!' : null })),
     h('div', { class: 'section-title' }, '出门和换季'),
     h('div', { class: 'group' },
       cell({ href: '#/trips', ic: 'suitcase', color: '#5f7fa8', title: '出差 / 旅行',
@@ -2343,7 +2455,39 @@ function settingsView() {
         '（每次修改都是一次提交，可以在 GitHub 上查看历史）'),
       h('button', { class: 'danger', onclick: logout }, '退出这台设备')) : null,
     store?.data ? cityCard() : null,
+    store?.data ? pushCard() : null,
     aiCard(inRepo, ai, aiKey, aiModel, saveAi));
+}
+
+// 手机推送：每晚 8 点问「今天穿的要洗吗」，该洗衣服、床单该洗也会一起说
+function pushCard() {
+  const status = h('p', { class: 'muted small' }, '检查中……');
+  const sup = pushSupport();
+  const enable = async () => {
+    try {
+      await saving('正在开启……', async () => {
+        const sub = await subscribe();
+        await store.saveJson(PUSH_FILE, (cfg) => {
+          const subs = (cfg.subscriptions || []).filter((x) => x.endpoint !== sub.endpoint);
+          return { ...cfg, subscriptions: [...subs, { ...sub, device: deviceName(), added: localDay() }] };
+        }, `开启推送：${deviceName()}`);
+      });
+      toast('已开启，应该马上收到一条「提醒已开启」');
+      render();
+    } catch { /* saving 已提示 */ }
+  };
+  if (sup.ok) {
+    currentSubscription().then((sub) => {
+      status.textContent = sub ? `✓ 这台设备已开启（${Notification.permission === 'granted' ? '通知已允许' : '通知没允许'}）` : '这台设备还没开启';
+    }).catch(() => { status.textContent = '这台设备还没开启'; });
+  } else {
+    status.textContent = sup.why;
+  }
+  return h('div', { class: 'card' },
+    h('h3', {}, '手机提醒'),
+    h('p', { class: 'small' }, '每晚 8 点左右推送「今天穿的要洗吗」；该洗衣服、床单该洗了也会一起提醒。由 GitHub 定时发送，可能晚几分钟到半小时。'),
+    status,
+    sup.ok ? h('button', { class: 'secondary', onclick: enable }, '在这台设备上开启') : null);
 }
 
 // 常住城市：今天穿什么查天气用，存在数据里，所有设备共用

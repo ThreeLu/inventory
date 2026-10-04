@@ -37,6 +37,10 @@ export function migrate(data) {
   }
   data.trips ||= [];
   data.prefs ||= {};
+  // 贴身衣物第二天自动收回
+  for (const it of data.items) {
+    if (it.laundry?.autoReturn && it.laundry.autoReturn <= localDay()) { delete it.laundry; it.wearsSinceWash = 0; }
+  }
   // 衣服加上部位、厚薄、风格（今天穿什么靠这些搭配）
   const want = { 衣服: ['部位', '季节', '厚薄', '风格', '颜色', '尺码'], 运动服: ['部位', '季节', '厚薄', '颜色', '尺码'], 鞋: ['季节', '风格', '颜色', '尺码'] };
   data.fieldPresets ||= {};
@@ -87,6 +91,46 @@ export function bumpHighWater(data) {
 // 新建时「消耗品」开关的默认值：类别在 consumableTags 里
 export function defaultConsumable(data, tags) {
   return Boolean(tags.length && data.consumableTags.includes(tags[0]));
+}
+
+// ---------- 洗衣 ----------
+// item.laundry = { state: 'dirty'（待洗）| 'washing'（在洗在晾）, since, autoReturn? }；没有就是干净的
+// item.wearsSinceWash：上次洗后穿了几次，用来决定晚上问「要洗吗」时默认勾不勾
+export const INTIMATE_PARTS = ['内衣', '袜子']; // 贴身衣物：每天洗，第二天自动收回
+export const LAUNDRY_DEFAULTS = { 上衣: 1, 连衣裙: 1, 下装: 3, 外套: 5, count: 8, days: 4, bedding: 14 };
+export const laundryPrefs = (data) => ({ ...LAUNDRY_DEFAULTS, ...(data.prefs?.laundry || {}) });
+
+export function localDay(offset = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const daysSince = (day) => Math.floor((new Date(localDay()) - new Date(day)) / 86400000);
+
+export function laundryStatus(data) {
+  const p = laundryPrefs(data);
+  const live = data.items.filter((i) => !i.archived);
+  const dirty = live.filter((i) => i.laundry?.state === 'dirty');
+  const washing = live.filter((i) => i.laundry?.state === 'washing' && !i.laundry.autoReturn);
+  const oldest = dirty.reduce((m, i) => Math.max(m, daysSince(i.laundry.since)), 0);
+  const bedding = live.filter((i) => i.tags[0] === '床上用品' && !i.laundry)
+    .map((i) => ({ item: i, days: daysSince(i.lastWashed || (i.createdAt || localDay()).slice(0, 10)) }))
+    .filter((b) => b.days >= p.bedding);
+  return { dirty, washing, oldest, due: dirty.length >= p.count || (dirty.length > 0 && oldest >= p.days), bedding };
+}
+
+// 洗衣服时按颜色、材质分批
+export function laundryBatches(items) {
+  const groups = { 单独洗或送洗: [], 床品: [], 浅色: [], 深色: [], 彩色: [] };
+  for (const it of items) {
+    const color = `${it.fields?.['颜色'] || ''} ${it.name}`;
+    if (/羽绒|羊毛|羊绒|真丝|丝绸|西装|大衣|呢子/.test(it.name)) groups['单独洗或送洗'].push(it);
+    else if (it.tags[0] === '床上用品') groups['床品'].push(it);
+    else if (/白|米|浅|杏|奶|粉|淡/.test(color)) groups['浅色'].push(it);
+    else if (/黑|深|藏青|藏蓝|灰|咖|棕|墨|军绿/.test(color)) groups['深色'].push(it);
+    else groups['彩色'].push(it);
+  }
+  return Object.entries(groups).filter(([, xs]) => xs.length);
 }
 
 // 箱子（搬家纸箱、出差的行李箱）是一种特殊的位置：box: 'move' | 'trip'
@@ -218,28 +262,39 @@ export class Store {
   }
 
   async readConfig(ref) {
+    return (await this.readJson(CONFIG_FILE, ref)) || {};
+  }
+
+  // 读数据仓库里的一个 JSON 文件；不存在返回 null
+  async readJson(path, ref = this.head || 'main') {
     try {
-      return JSON.parse(await this.gh.readText(CONFIG_FILE, ref));
+      return JSON.parse(await this.gh.readText(path, ref));
     } catch (e) {
-      if (e instanceof GitHubError && e.status === 404) return {}; // 还没保存过
+      if (e instanceof GitHubError && e.status === 404) return null;
       throw e;
     }
   }
 
-  // 写 config/ai.json（整个替换）。和 save() 一样，分支被别处更新了就重试
-  async saveConfig(config, message) {
+  // 改一个 JSON 文件（不是 inventory.json）：在最新内容上执行 mutate，冲突就重试
+  async saveJson(path, mutate, message) {
     for (let attempt = 0; attempt < 4; attempt++) {
       const head = await this.gh.headSha();
+      const next = mutate(structuredClone((await this.readJson(path, head)) || {}));
       try {
-        this.head = await this.gh.commit(head, [{ path: CONFIG_FILE, content: JSON.stringify(config, null, 1) + '\n' }], message);
-        this.config = config;
-        this.data = null; // 下次 load() 重新读数据（head 变了）
+        this.head = await this.gh.commit(head, [{ path, content: JSON.stringify(next, null, 1) + '\n' }], message);
+        if (path === CONFIG_FILE) this.config = next;
+        this.data = null; // head 变了，重新读一次数据
         await this.load();
-        return;
+        return next;
       } catch (e) {
         if (!(e instanceof GitHubError && e.status === 422) || attempt === 3) throw e;
       }
     }
+  }
+
+  // 写 config/ai.json（整个替换）
+  saveConfig(config, message) {
+    return this.saveJson(CONFIG_FILE, () => config, message);
   }
 
   // mutate(data) 直接修改传入的数据并可返回结果；uploads: [{ path, base64 }]；removes: [path]

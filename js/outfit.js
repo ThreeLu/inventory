@@ -9,7 +9,7 @@ export const SCHEDULES = ['上课', '运动', '约会', '见客户', '面试', '
 export const CLOTHES_TAGS = ['衣服', '运动服', '鞋'];
 // 衣服字段的可选值（表单里显示成下拉）
 export const FIELD_OPTIONS = {
-  部位: ['上衣', '下装', '外套', '连衣裙', '鞋', '配饰'],
+  部位: ['上衣', '下装', '外套', '连衣裙', '鞋', '配饰', '内衣', '袜子'],
   季节: ['春秋', '夏', '冬', '四季'],
   厚薄: ['薄', '适中', '厚'],
   风格: ['休闲', '正式', '运动'],
@@ -62,7 +62,8 @@ const isClothes = (i) => CLOTHES_TAGS.includes(i.tags[0]);
 
 // 今天能穿的：没归档、没借出、不在箱子/行李箱里、不在洗
 export function wearable(data) {
-  return data.items.filter((i) => isClothes(i) && !i.archived && !i.borrow && !i.loan && !i.laundry && !isBox(data, i.location));
+  return data.items.filter((i) => isClothes(i) && !i.archived && !i.borrow && !i.loan && !i.laundry && !isBox(data, i.location)
+    && !['内衣', '袜子'].includes(i.fields?.['部位'])); // 贴身衣物不参与搭配
 }
 
 export function partOf(item) {
