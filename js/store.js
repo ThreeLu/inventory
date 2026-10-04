@@ -275,6 +275,8 @@ export class Store {
 
   async load() {
     const head = await this.gh.headSha();
+    // 用缓存打开时数据可能没变（head 相同），但 AI 设置不在缓存里，也要读一次
+    if (this.config === undefined) this.config = await this.readConfig(head);
     if (head !== this.head || !this.data) {
       this.config = await this.readConfig(head);
       this.data = migrate(JSON.parse(await this.gh.readText(DATA_FILE, head)));

@@ -479,6 +479,9 @@ def _(c):
     c.go("#/new")
     p.reload()
     p.wait_for_function("!localStorage.getItem('inventory-deepseek')")   # 密钥已搬进数据仓库
+    # 回归：数据没变时重新打开（用缓存），也要读到数据仓库里的 AI 设置
+    p.reload()
+    p.wait_for_timeout(1500)
     p.get_by_label("名称").fill("优衣库摇粒绒外套")
     p.get_by_role("button", name="AI 补全").click()
     expect(p.locator(".ai-suggest")).to_contain_text("部位：外套")
