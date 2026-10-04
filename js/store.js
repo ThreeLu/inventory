@@ -97,8 +97,30 @@ export function defaultConsumable(data, tags) {
 // item.laundry = { state: 'dirty'（待洗）| 'washing'（在洗在晾）, since, autoReturn? }；没有就是干净的
 // item.wearsSinceWash：上次洗后穿了几次，用来决定晚上问「要洗吗」时默认勾不勾
 export const INTIMATE_PARTS = ['内衣', '袜子']; // 贴身衣物：每天洗，第二天自动收回
-export const LAUNDRY_DEFAULTS = { 上衣: 1, 连衣裙: 1, 下装: 3, 外套: 5, count: 8, days: 4, bedding: 14 };
-export const laundryPrefs = (data) => ({ ...LAUNDRY_DEFAULTS, ...(data.prefs?.laundry || {}) });
+// 穿几次默认勾「要洗」：当天最高温低于 coldBelow 按秋冬（cold），否则按春夏（warm）
+export const LAUNDRY_DEFAULTS = {
+  warm: { 上衣: 1, 下装: 3, 外套: 5 }, cold: { 上衣: 3, 下装: 5, 外套: 12 }, coldBelow: 20, count: 8, days: 4, bedding: 14,
+};
+export function laundryPrefs(data) {
+  const p = data.prefs?.laundry || {};
+  const D = LAUNDRY_DEFAULTS;
+  return { ...D, ...p, warm: { ...D.warm, ...(p.warm || {}) }, cold: { ...D.cold, ...(p.cold || {}) } };
+}
+
+// 记录今天穿的（可以一天改几次）：新选的穿着次数 +1，取消的 -1
+export function setTodayWear(data, ids, day) {
+  for (const it of data.items) {
+    const was = (it.worn || []).includes(day);
+    const now = ids.includes(it.id);
+    if (now && !was) {
+      it.worn = [...(it.worn || []), day].slice(-90);
+      it.wearsSinceWash = (it.wearsSinceWash || 0) + 1;
+    } else if (!now && was && !INTIMATE_PARTS.includes(it.fields?.['部位'])) {
+      it.worn = it.worn.filter((d) => d !== day);
+      it.wearsSinceWash = Math.max(0, (it.wearsSinceWash || 0) - 1);
+    }
+  }
+}
 
 export function localDay(offset = 0) {
   const d = new Date();

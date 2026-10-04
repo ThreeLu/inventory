@@ -9,7 +9,7 @@ export const SCHEDULES = ['上课', '运动', '约会', '见客户', '面试', '
 export const CLOTHES_TAGS = ['衣服', '运动服', '鞋'];
 // 衣服字段的可选值（表单里显示成下拉）
 export const FIELD_OPTIONS = {
-  部位: ['上衣', '下装', '外套', '连衣裙', '鞋', '配饰', '内衣', '袜子'],
+  部位: ['上衣', '下装', '外套', '鞋', '配饰', '内衣', '袜子'],
   季节: ['春秋', '夏', '冬', '四季'],
   厚薄: ['薄', '适中', '厚'],
   风格: ['休闲', '正式', '运动'],
@@ -71,7 +71,7 @@ export function partOf(item) {
   if (p) return p;
   if (item.tags[0] === '鞋') return '鞋';
   if (/外套|夹克|羽绒|大衣|风衣|冲锋衣|棉服|开衫/.test(item.name)) return '外套';
-  if (/裤|裙/.test(item.name)) return /连衣裙/.test(item.name) ? '连衣裙' : '下装';
+  if (/裤|裙/.test(item.name)) return '下装';
   return '上衣';
 }
 
@@ -95,11 +95,7 @@ export function ruleOutfit(data, w) {
     return x;
   };
   const best = (part) => pool.filter((i) => partOf(i) === part).sort((a, b) => score(b) - score(a))[0];
-  const top = best('上衣');
-  const dress = best('连衣裙');
-  const items = [];
-  if (top) items.push(top, best('下装'));
-  else if (dress) items.push(dress);
+  const items = [best('上衣'), best('下装')];
   if (w && w.min < 16) items.push(best('外套'));
   items.push(best('鞋'));
   const ids = items.filter(Boolean).map((i) => i.id);
@@ -115,6 +111,13 @@ export function ruleOutfit(data, w) {
 
 // ---------- DeepSeek ----------
 
+// 今天算不算秋冬（决定洗衣的默认次数）：最高温低于 coldBelow；不知道天气就按月份猜
+export function isColdDay(w, coldBelow = 20) {
+  if (w && w.max != null) return w.max < coldBelow;
+  const m = new Date().getMonth() + 1;
+  return m >= 10 || m <= 4;
+}
+
 export async function aiOutfits(ai, data, w, schedule, note) {
   const pool = wearable(data);
   if (!pool.length) throw new AiError('衣柜里还没有能穿的衣服');
@@ -123,8 +126,8 @@ export async function aiOutfits(ai, data, w, schedule, note) {
     return `${i.id} | ${i.name} | ${partOf(i)} | ${f || '-'} | 最近穿：${(i.worn || []).slice(-3).join(',') || '没记录'}`;
   });
   const system = [
-    '你是帮大学生搭配日常穿着的助手。只能从给出的衣服里挑，用它们的 id。',
-    '给出 2～3 套不同的方案（风格可以有差别），每套是一整身：上衣+下装（或连衣裙）+鞋，冷的时候加外套。',
+    `你是帮${data.prefs?.gender === '男' ? '男' : ''}大学生搭配日常穿着的助手。只能从给出的衣服里挑，用它们的 id。`,
+    '给出 2～3 套不同的方案（风格可以有差别），每套是一整身：上衣+下装+鞋，冷的时候加外套。',
     '要求：温度合适（参考早中晚气温和厚薄、季节字段），场合合适（见客户、面试偏正式，运动穿运动服），颜色协调；',
     '尽量不选最近两三天穿过的；下雨不选浅色鞋。',
     'title 写一句话概括这套（10 个字以内），why 用一两句话说明为什么这样搭，tips 是出门小提醒（比如带伞、中午热可以脱外套）。',

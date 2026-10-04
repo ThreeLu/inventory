@@ -3,12 +3,12 @@ import {
   Store, normalizeAssetId, newId, assertAssetFree, LOCATION_PREFIX,
   defaultLabel, setLabel, LABEL_TEXT, prefixForTags, defaultConsumable, isDepleted, ARCHIVE_REASONS,
   isBox, moveItem, borrowStatus,
-  INTIMATE_PARTS, laundryPrefs, laundryStatus, laundryBatches, localDay, nextAssetInPrefix, nextTagCode, reminders,
+  INTIMATE_PARTS, laundryPrefs, laundryStatus, laundryBatches, localDay, setTodayWear, nextAssetInPrefix, nextTagCode, reminders,
 } from './store.js';
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
-import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr } from './outfit.js';
+import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay } from './outfit.js';
 import { seasonPlan, storageFor, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
@@ -136,7 +136,7 @@ const routes = [
   [/^\/trips$/, () => tripsView()],
   [/^\/trip\/new$/, () => tripPlanView(null)],
   [/^\/trip\/([^/]+)$/, (id) => tripPlanView(id)],
-  [/^\/outfit$/, () => outfitView()],
+  [/^\/outfit$/, (_, q) => outfitView(q)],
   [/^\/wear$/, () => wearView()],
   [/^\/laundry$/, () => laundryView()],
   [/^\/season$/, () => seasonView()],
@@ -1249,8 +1249,9 @@ function notices() {
     if (left <= 14) out.push({ href: '#/settings', ic: 'gear', color: 'var(--danger)', title: left < 0 ? 'GitHub 令牌已经过期' : `GitHub 令牌还有 ${left} 天过期` });
   }
   const t = tonight();
-  if (t.items.length && !t.answered && new Date().getHours() >= 20) {
-    out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--accent)', title: '今天穿的要洗吗？', meta: `${t.items.length} 件` });
+  if (!t.answered && new Date().getHours() >= 20) {
+    if (t.items.length) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--accent)', title: '今天穿的要洗吗？', meta: `${t.items.length} 件` });
+    else if (!wornToday().length && wearable(store.data).length) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--accent)', title: '今天穿了什么？' });
   }
   const ls = laundryStatus(store.data);
   if (ls.due) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--amber)', title: '该洗衣服了', meta: `篮子里 ${ls.dirty.length} 件` });
@@ -1324,31 +1325,46 @@ async function generateOutfit({ schedule, note } = {}) {
   }
 }
 
-function garmentTile(id) {
+function garmentTile(id, { selected, recommended, onclick } = {}) {
   const it = store.item(id);
   if (!it) return null;
   const thumb = it.photos?.[0]?.thumb;
-  return h('a', { class: 'garment', href: `#/item/${id}` },
-    h('div', { class: 'ph' }, thumb ? lazyPhoto(gh, thumb) : h('span', { class: 'initial' }, it.name.slice(0, 1))),
-    h('span', {}, it.name));
+  return h(onclick ? 'button' : 'a', {
+    class: `garment${selected ? ' selected' : ''}`, type: onclick ? 'button' : undefined,
+    href: onclick ? undefined : `#/item/${id}`, onclick,
+  },
+  h('div', { class: 'ph' }, thumb ? lazyPhoto(gh, thumb) : h('span', { class: 'initial' }, it.name.slice(0, 1)),
+    recommended ? h('span', { class: 'rec' }, '推荐') : null,
+    selected ? h('span', { class: 'tick' }, '✓') : null),
+  h('span', {}, it.name));
 }
 
-async function wearOption(option) {
+// 今天已经记录穿了哪些（衣服、鞋，不含贴身衣物）
+function wornToday() {
   const day = todayStr();
-  await saving('正在记录…', () => store.save(`今天穿：${option.items.map((id) => store.item(id)?.name).join('、')}`, (data) => {
-    for (const it of data.items) {
-      if (!option.items.includes(it.id)) continue;
-      markWorn(it, day);
-    }
-    if (data.outfit?.date === day) data.outfit.chosen = data.outfit.options.findIndex((o) => o === option || o.title === option.title);
-  })).catch(() => {});
-  toast('记下了，今天穿这套');
-  render();
+  return store.data.items.filter((i) => isClothes(i) && (i.worn || []).includes(day) && !INTIMATE_PARTS.includes(i.fields?.['部位']));
+}
+
+async function saveTodayWear(ids) {
+  const day = todayStr();
+  await saving('正在记录…', () => store.save(`今天穿：${ids.map((id) => store.item(id)?.name).join('、') || '（清空）'}`, (data) => {
+    setTodayWear(data, ids, day);
+    if (data.outfit?.date === day) data.outfit.chosenItems = ids;
+  }));
+  toast('记下了');
+  // 晚上记的，接着问要不要洗
+  go(new Date().getHours() >= 20 ? '#/laundry' : '#/', true);
 }
 
 function outfitCard() {
   const clothes = wearable(store.data);
   const card = h('div', { class: 'card outfit-card' }, h('div', { class: 'eyebrow' }, '今天穿什么'));
+  const worn = wornToday();
+  if (worn.length) {
+    card.append(h('h2', {}, '今天穿的'), h('div', { class: 'outfit' }, worn.map((i) => garmentTile(i.id))),
+      h('a', { class: 'button secondary wide', href: '#/outfit?pick=1' }, '改一下'));
+    return card;
+  }
   if (!clothes.length) {
     card.append(h('h2', {}, '先把衣服录进来'),
       h('p', { class: 'why' }, '衣服填好部位、季节、厚薄、颜色，这里每天会按天气和安排推荐搭配。新建时点「AI 补全」可以自动填。'),
@@ -1362,28 +1378,28 @@ function outfitCard() {
   }
   const o = todaysOutfit();
   if (!o) {
-    card.append(h('h2', {}, '正在为你搭配……'), h('p', { class: 'why' }, '第一次打开要等十几秒，今天再打开就直接看到了。'));
+    card.append(h('h2', {}, '正在为你搭配……'), h('p', { class: 'why' }, '第一次打开要等十几秒，今天再打开就直接看到了。'),
+      h('a', { class: 'button secondary wide', href: '#/outfit?pick=1' }, '直接选今天穿的'));
     generateOutfit().then(() => { if (currentPath() === '' || currentPath() === '/') render(); })
-      .catch((e) => { card.lastChild.textContent = `没生成出来：${e.message}`; });
+      .catch((e) => { card.querySelector('.why').textContent = `没生成出来：${e.message}`; });
     return card;
   }
-  const idx = o.chosen ?? Math.min(outfitState.option, o.options.length - 1);
+  const idx = Math.min(outfitState.option, o.options.length - 1);
   const opt = o.options[idx];
   const next = () => { outfitState.option = (idx + 1) % o.options.length; render(); };
   card.append(
-    h('h2', {}, o.chosen != null ? `今天穿：${opt.title}` : opt.title),
-    h('div', { class: 'outfit' }, opt.items.map(garmentTile)),
+    h('h2', {}, opt.title),
+    h('div', { class: 'outfit' }, opt.items.map((id) => garmentTile(id))),
     h('p', { class: 'why' }, opt.why, opt.tips?.length ? h('span', { class: 'block' }, `💡 ${opt.tips.join('；')}`) : null),
-    o.chosen != null
-      ? h('a', { class: 'button secondary wide', href: '#/outfit' }, '看看其他方案')
-      : h('div', { class: 'row-btns' },
-        h('button', { onclick: () => wearOption(opt) }, '就穿这套'),
-        o.options.length > 1 ? h('button', { class: 'secondary', onclick: next }, `换一套（${idx + 1}/${o.options.length}）`)
-          : h('a', { class: 'button secondary', href: '#/outfit' }, '换安排')));
+    h('div', { class: 'row-btns' },
+      h('a', { class: 'button', href: '#/outfit?pick=1' }, '选今天穿的'),
+      o.options.length > 1 ? h('button', { class: 'secondary', onclick: next }, `换一套（${idx + 1}/${o.options.length}）`) : null));
   return card;
 }
 
-function outfitView() {
+const PICK_PARTS = ['上衣', '下装', '外套', '鞋', '配饰'];
+
+function outfitView(q = {}) {
   const o = todaysOutfit();
   const schedule = new Set(o?.schedule || ['上课']);
   const chipBox = h('div', { class: 'chips' });
@@ -1400,21 +1416,49 @@ function outfitView() {
       .catch(() => {});
     render();
   };
+
+  // 挑选：推荐的只打「推荐」标记，不预选；已经记录过的预选
+  const recommended = new Set((o?.options || []).flatMap((opt) => opt.items));
+  const already = wornToday().map((i) => i.id);
+  const picked = new Set(already);
+  const pool = [...wearable(store.data), ...wornToday().filter((i) => !wearable(store.data).includes(i))];
+  const pickBox = h('div', {});
+  const saveBtn = h('button', { onclick: () => saveTodayWear([...picked]) });
+  const drawPick = () => {
+    saveBtn.textContent = already.length ? `改成这些（${picked.size} 件）` : `就穿这些（${picked.size} 件）`;
+    saveBtn.disabled = !picked.size && !already.length;
+    fill(pickBox, PICK_PARTS.map((part) => {
+      const xs = pool.filter((i) => partOf(i) === part)
+        .sort((a, b) => Number(recommended.has(b.id)) - Number(recommended.has(a.id)));
+      return xs.length ? [h('div', { class: 'group-title' }, part),
+        h('div', { class: 'outfit pick' }, xs.map((i) => garmentTile(i.id, {
+          selected: picked.has(i.id), recommended: recommended.has(i.id),
+          onclick: () => { if (picked.has(i.id)) picked.delete(i.id); else picked.add(i.id); drawPick(); },
+        })))] : null;
+    }));
+  };
+  drawPick();
+  const pickCard = h('div', { class: 'card', id: 'pick' },
+    h('div', { class: 'eyebrow' }, already.length ? '今天穿的（可以改）' : '今天穿什么，点选'),
+    h('p', { class: 'why' }, '标「推荐」的是 AI 推荐过的，穿哪件你自己点。'),
+    pickBox);
+  if (q.pick) setTimeout(() => pickCard.scrollIntoView({ block: 'start' }), 50);
+
   return h('div', {},
     header('今天穿什么'),
     weather,
-    h('div', { class: 'card' },
-      h('h3', {}, '今天的安排'), chipBox, note,
-      h('button', { class: 'wide', onclick: regen }, o ? '按新的安排重新推荐' : '推荐搭配')),
     o ? [
       h('p', { class: 'muted small' }, o.source === 'DeepSeek' ? '由 DeepSeek 搭配' : `按规则挑的${o.fallback ? `（DeepSeek 没用上：${o.fallback}）` : ''}`),
       o.options.map((opt, i) => h('div', { class: 'card outfit-card' },
-        h('div', { class: 'eyebrow' }, o.chosen === i ? '今天穿的' : `方案 ${i + 1}`),
+        h('div', { class: 'eyebrow' }, `推荐 ${i + 1}`),
         h('h2', {}, opt.title),
-        h('div', { class: 'outfit' }, opt.items.map(garmentTile)),
-        h('p', { class: 'why' }, opt.why, opt.tips?.length ? h('span', { class: 'block' }, `💡 ${opt.tips.join('；')}`) : null),
-        o.chosen === i ? null : h('button', { class: 'secondary wide', onclick: () => wearOption(opt) }, '就穿这套'))),
-    ] : null);
+        h('div', { class: 'outfit' }, opt.items.map((id) => garmentTile(id))),
+        h('p', { class: 'why' }, opt.why, opt.tips?.length ? h('span', { class: 'block' }, `💡 ${opt.tips.join('；')}`) : null))),
+    ] : null,
+    pickCard,
+    h('details', { class: 'card' }, h('summary', {}, '换个安排重新推荐'),
+      chipBox, note, h('button', { class: 'wide', onclick: regen }, '重新推荐')),
+    h('div', { class: 'actions sticky' }, saveBtn));
 }
 
 // 记一次穿着：同一天只算一次；贴身衣物当天进「在洗」，第二天自动收回原处
@@ -1428,7 +1472,6 @@ function markWorn(it, day) {
 // ---------- 洗衣篮 ----------
 
 const LAUNDRY_TEXT = { dirty: '在洗衣篮里', washing: '在洗 / 在晾' };
-const LAUNDRY_DEFAULTS_UI = { 上衣: 1, 连衣裙: 1, 下装: 3, 外套: 5, count: 8, days: 4, bedding: 14 };
 const canWash = (it) => ['衣服', '运动服', '床上用品'].includes(it.tags[0]) && !INTIMATE_PARTS.includes(it.fields?.['部位']);
 
 function setLaundry(ids, state, message) {
@@ -1455,7 +1498,9 @@ function tonight() {
 
 function shouldWash(it) {
   const p = laundryPrefs(store.data);
-  return (it.wearsSinceWash || 0) >= (p[partOf(it)] ?? 99);
+  const w = weatherCache.w || todaysOutfit()?.weather;
+  const rule = isColdDay(w, p.coldBelow) ? p.cold : p.warm;
+  return (it.wearsSinceWash || 0) >= (rule[partOf(it)] ?? 99);
 }
 
 function laundryView() {
@@ -1474,23 +1519,47 @@ function laundryView() {
   const selDirty = new Set(st.dirty.map((i) => i.id));
   const selWash = new Set(st.washing.map((i) => i.id));
   const editRules = () => {
-    const inputs = Object.fromEntries(['上衣', '下装', '外套', '连衣裙', 'count', 'days', 'bedding'].map((k) => [k, h('input', { type: 'number', min: 1, value: p[k] })]));
-    const labels = { 上衣: '上衣穿几次洗', 下装: '裤子穿几次洗', 外套: '外套穿几次洗', 连衣裙: '连衣裙穿几次洗', count: '篮子里攒几件提醒', days: '最早一件放几天提醒', bedding: '床上用品几天洗一次' };
+    const num = (v) => h('input', { type: 'number', min: 1, value: v, inputmode: 'numeric' });
+    const rows = ['上衣', '下装', '外套'].map((k) => ({ k, warm: num(p.warm[k]), cold: num(p.cold[k]) }));
+    const coldBelow = num(p.coldBelow);
+    const others = { count: [num(p.count), '洗衣篮里攒几件提醒'], days: [num(p.days), '最早一件放几天提醒'], bedding: [num(p.bedding), '床上用品几天洗一次'] };
     openSheet({
       title: '洗衣设置',
-      body: h('div', { class: 'form' }, Object.entries(inputs).map(([k, el]) => h('label', {}, labels[k], el))),
+      body: h('div', { class: 'form' },
+        h('p', { class: 'small' }, '穿几次默认勾「要洗」。当天最高温低于下面的温度按秋冬算。'),
+        h('div', { class: 'rule-grid' }, h('span', {}), h('b', {}, '春夏'), h('b', {}, '秋冬'),
+          rows.map((r) => [h('span', {}, r.k === '下装' ? '裤子' : r.k), r.warm, r.cold])),
+        h('label', {}, '最高温低于几度算秋冬（°C）', coldBelow),
+        Object.values(others).map(([el, text]) => h('label', {}, text, el))),
       confirmText: '保存',
       onConfirm: () => saving('正在保存…', () => store.save('洗衣设置', (data) => {
-        data.prefs = { ...data.prefs, laundry: Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, Math.max(1, Number(el.value) || LAUNDRY_DEFAULTS_UI[k])])) };
+        const n = (el, d) => Math.max(1, Number(el.value) || d);
+        data.prefs = { ...data.prefs, laundry: {
+          warm: Object.fromEntries(rows.map((r) => [r.k, n(r.warm, p.warm[r.k])])),
+          cold: Object.fromEntries(rows.map((r) => [r.k, n(r.cold, p.cold[r.k])])),
+          coldBelow: Number(coldBelow.value) || p.coldBelow,
+          ...Object.fromEntries(Object.entries(others).map(([k, [el]]) => [k, n(el, p[k])])),
+        } };
       })).then(render).catch(() => {}),
     });
   };
+  const noRecord = !t.answered && !wornToday().length;
+  const skipToday = () => saving('正在保存…', () => store.save('今天没换衣服', (data) => {
+    data.prefs = { ...data.prefs, laundryAsked: t.day };
+  })).then(render).catch(() => {});
 
   return h('div', {},
     header('洗衣篮', h('button', { class: 'icon-btn', 'aria-label': '洗衣设置', onclick: editRules }, icon('gear'))),
+    noRecord ? h('div', { class: 'card' },
+      h('div', { class: 'eyebrow' }, '今天'),
+      h('h3', {}, '今天穿了什么？先记一下，再看要不要洗'),
+      h('div', { class: 'row-btns' },
+        h('a', { class: 'button', href: '#/outfit?pick=1' }, '去选'),
+        h('button', { class: 'secondary', onclick: skipToday }, '今天没换衣服'))) : null,
     t.items.length && !t.answered ? h('div', { class: 'card' },
       h('div', { class: 'eyebrow' }, '今天穿的'),
       h('h3', {}, '要洗吗？勾上的放进洗衣篮'),
+      h('p', { class: 'muted small' }, `今天按${isColdDay(weatherCache.w || todaysOutfit()?.weather, p.coldBelow) ? '秋冬' : '春夏'}的次数默认勾选`),
       t.items.map((it) => checkRow(it, picked, `${partOf(it)} · 洗后穿了 ${it.wearsSinceWash || 1} 次`)),
       h('div', { class: 'row-btns', style: 'margin-top:12px' },
         h('button', { onclick: () => answer([...picked]) }, '放进洗衣篮'),

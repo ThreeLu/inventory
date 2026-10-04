@@ -53,7 +53,7 @@
 
 ## AI 功能（都走 `js/ai.js` 的 `askJson`）
 
-- 今天穿什么（`js/outfit.js`）：常住城市 `data.prefs.homeCity`（济南）今天的天气 + 安排 + 能穿的衣服（字段 部位/季节/厚薄/风格/颜色）→ 2～3 套；结果存 `data.outfit`（当天缓存），「就穿这套」写 `item.worn` 日期。无 AI 时规则挑一套。
+- 今天穿什么（`js/outfit.js`）：常住城市 `data.prefs.homeCity`（济南）今天的天气 + 安排 + 能穿的衣服（字段 部位/季节/厚薄/风格/颜色）→ 2～3 套推荐，存 `data.outfit`（当天缓存）。**推荐只打「推荐」标记、不预选**，用户在挑选页一件件点今天穿的（`setTodayWear`，一天可改几次，穿着次数跟着更正）。用户是男生（`prefs.gender`），没有连衣裙。无 AI 时规则挑一套。
 - 问一问：把全部物品（含价格、购买日期、备注描述、品牌型号；不含序列号和照片）发给 AI；要修改时 AI 返回 `actions`，界面列出、用户确认后才执行（`ACTIONS` / `applyAction`）。不给用药建议。聊天记录只在内存。
 - AI 补全：新建时按名称推荐类别、字段、是否消耗品。
 - 换季整理（`js/season.js`）：清明/立夏/白露/寒露/立冬判断该穿的季节，列出拿进当季衣柜和收起来的；数据仓库 `.github/workflows/season.yml` 在这几天发邮件。
@@ -61,7 +61,7 @@
 ## 洗衣篮
 
 - `item.laundry = { state: 'dirty'|'washing', since, autoReturn? }`，没有就是干净；`wearsSinceWash` 记洗后穿了几次，`lastWashed` 记上次洗。
-- 晚上问「今天穿的要洗吗」：今天穿过、没在洗衣流程里的衣服；默认勾选按 `prefs.laundry` 的次数（上衣 1、下装 3、外套 5…）。回答后写 `prefs.laundryAsked = 今天`。
+- 晚上问「今天穿的要洗吗」：今天穿过、没在洗衣流程里的衣服；默认勾选按穿着次数：当天最高温 < `coldBelow`(20°C) 用 `cold`（上衣 3、裤子 5、外套 12），否则 `warm`（1/3/5）。当天没记录穿什么就先问「今天穿了什么？」（可点「今天没换衣服」）。回答后写 `prefs.laundryAsked = 今天`。
 - 内衣、袜子（部位）每天洗：穿过就 `washing + autoReturn 明天`，`migrate()` 到期自动清掉，不参与搭配。
 - 攒够件数或放太久、床上用品超过周期 → 首页和晚上推送提醒。分批：单独洗或送洗 / 床品 / 浅色 / 深色 / 彩色。
 - 推送：`sw.js` + `js/push.js` 订阅，订阅存数据仓库 `config/push.json`；数据仓库 `.github/workflows/laundry.yml` 每天 12:00 UTC（北京 20 点）用 secret `VAPID_PRIVATE_KEY` 发送（`laundry_push.py`，规则和网页一致）。VAPID 联系方式用网址，不用用户邮箱。

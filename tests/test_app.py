@@ -375,7 +375,7 @@ def _(c):
     expect(p.locator(".check-row", has_text="白色T恤")).to_have_count(0)   # 已归档，且是夏装
 
 
-@step("今天穿什么：首页自动搭配、换一套、就穿这套记下穿着")
+@step("今天穿什么：首页推荐、换一套、自己点选今天穿的、白天改一下")
 def _(c):
     p = c.page
     p.evaluate("() => localStorage.setItem('inventory-deepseek', JSON.stringify({ key: 'sk-test' }))")
@@ -385,26 +385,39 @@ def _(c):
     # 首页第一次打开时（还没有密钥）已经按规则生成过今天的搭配；有了 DeepSeek 后重新推荐
     expect(card.locator("h2")).to_be_visible(timeout=20000)
     c.go("#/outfit")
+    p.get_by_text("换个安排重新推荐").click()
     p.get_by_role("button", name="宅宿舍").click()
     p.get_by_role("button", name="见客户").click()
-    p.get_by_role("button", name="按新的安排重新推荐").click()
+    p.get_by_role("button", name="重新推荐", exact=True).click()
     expect(p.get_by_text("由 DeepSeek 搭配")).to_be_visible(timeout=20000)
     assert "见客户" in c.data()["outfit"]["schedule"]
     c.go("#/")
     expect(card.locator("h2")).to_have_text("灰卫衣配黑羽绒", timeout=20000)
     p.get_by_role("button", name="换一套（1/2）").click()
     expect(card.locator("h2")).to_have_text("暖和的一套")
-    p.get_by_role("button", name="换一套（2/2）").click()
-    p.get_by_role("button", name="就穿这套").click()
-    expect(card.locator("h2")).to_contain_text("今天穿")
-    d = c.data()
-    assert d["outfit"]["chosen"] == 0 and d["outfit"]["source"] == "DeepSeek", d["outfit"]
-    worn = {i["id"] for i in d["items"] if i.get("worn")}
-    assert worn == {"iw3", "iw1", "ish"}, worn
+    # 推荐只打标记，不预选；自己一件件点
+    card.get_by_role("link", name="选今天穿的").click()
+    pick = p.locator("#pick")
+    expect(pick.locator(".garment.selected")).to_have_count(0)
+    expect(pick.locator(".garment", has_text="灰色卫衣").locator(".rec")).to_be_visible()
+    for name in ["灰色卫衣", "黑色羽绒服", "白色运动鞋"]:
+        pick.locator(".garment", has_text=name).click()
+    p.get_by_role("button", name="就穿这些（3 件）").click()
+    p.wait_for_function("!location.hash.startsWith('#/outfit')", timeout=20000)   # 保存完会离开挑选页
+    worn = {i["id"]: i.get("wearsSinceWash") for i in c.data()["items"] if i.get("worn")}
+    assert worn == {"iw3": 1, "iw1": 1, "ish": 1}, worn
+    # 白天改一下：鞋换掉，次数跟着更正
+    c.go("#/")
+    expect(card.locator("h2")).to_have_text("今天穿的")
+    card.get_by_role("link", name="改一下").click()
+    expect(pick.locator(".garment.selected")).to_have_count(3)
+    pick.locator(".garment", has_text="白色运动鞋").click()
+    p.get_by_role("button", name="改成这些（2 件）").click()
+    p.wait_for_function("!location.hash.startsWith('#/outfit')", timeout=20000)   # 保存完会离开挑选页
+    shoe = c.item("白色运动鞋")
+    assert not shoe.get("worn") and shoe.get("wearsSinceWash") == 0, shoe
     c.go("#/wear")
     expect(p.locator(".garment", has_text="灰色卫衣").first).to_be_visible()
-    c.go("#/outfit")
-    expect(p.get_by_text("今天穿的")).to_be_visible()
 
 
 @step("问一问：回答带物品卡片；要修改的先确认再执行")
@@ -430,9 +443,11 @@ def _(c):
     c.go("#/wardrobe")
     p.get_by_text("洗衣篮").click()
     card = p.locator(".card", has_text="要洗吗")
-    expect(card.locator(".check-row", has_text="灰色卫衣").locator("input")).to_be_checked()      # 上衣穿 1 次就洗
-    expect(card.locator(".check-row", has_text="黑色羽绒服").locator("input")).not_to_be_checked()  # 外套 5 次才洗
-    expect(card.locator(".check-row", has_text="运动鞋")).to_have_count(0)                         # 鞋不进洗衣篮
+    expect(card).to_contain_text("今天按秋冬的次数默认勾选")                                       # 假天气最高 3°C
+    expect(card.locator(".check-row", has_text="灰色卫衣").locator("input")).not_to_be_checked()  # 秋冬上衣 3 次才勾
+    expect(card.locator(".check-row", has_text="黑色羽绒服").locator("input")).not_to_be_checked()
+    expect(card.locator(".check-row", has_text="运动鞋")).to_have_count(0)                         # 鞋没穿、也不进洗衣篮
+    card.locator(".check-row", has_text="灰色卫衣").locator("input").check()
     card.get_by_role("button", name="放进洗衣篮").click()
     expect(p.get_by_text("要洗吗")).to_have_count(0)
     d = c.data()
