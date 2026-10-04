@@ -367,4 +367,33 @@ p.error { color: var(--danger); }
 .check-item .grow { color: var(--text); }
 .pick-list { max-height: 50vh; overflow-y: auto; margin-top: 8px; }
 
+/* 购物清单 */
+.add-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.add-row input { flex: 1; min-width: 0; }
+.add-row button { flex: none; }
+.shop-list { padding-top: 4px; padding-bottom: 4px; }
+.shop-row { display: flex; align-items: center; gap: 12px; min-height: 54px; border-bottom: 0.5px solid var(--line); cursor: pointer; user-select: none; }
+.shop-row:last-child { border-bottom: 0; }
+.shop-row .grow { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+.shop-tick { flex: none; width: 24px; height: 24px; border-radius: 12px; border: 1.5px solid var(--line); display: grid; place-items: center; font-size: 13px; color: var(--accent-text); }
+.shop-row.done .shop-tick { background: var(--accent); border-color: var(--accent); }
+.shop-row.done .grow { color: var(--muted); text-decoration: line-through; }
+.shop-row .more-btn { flex: none; font-size: 20px; color: var(--muted); }
+.warn-text { color: var(--danger); }
+.danger-text .grow { color: var(--danger); }
+.shop-ai h3 { display: flex; align-items: center; gap: 4px; }
+.shop-ai .check-item button { flex: none; }
+.bought-row { padding: 10px 0; border-bottom: 0.5px solid var(--line); }
+.bought-row:last-of-type { border-bottom: 0; }
+.bought-name { font-weight: 600; margin-bottom: 4px; }
+.bought-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; align-items: center; }
+.bought-inputs label { font-weight: 400; margin: 0; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.bought-inputs label > input:not([type=checkbox]) { margin-top: 0; min-width: 0; }
+.bought-inputs .span2 { grid-column: 1 / -1; }
+.low-row { margin: 10px 0 0 !important; font-weight: 400 !important; }
+.help-btn { font-weight: 600; font-size: 17px; }
+.help h4 { margin: 14px 0 4px; font-size: 15px; }
+.help ul { margin: 0; padding-left: 20px; }
+.help li { margin: 4px 0; line-height: 1.55; font-size: 15px; }
+
 [hidden] { display: none !important; }

@@ -24,7 +24,7 @@
 - 编号和贴不贴标签是两回事。`label`：`none` 不贴 / `pending` 待打印 / `printed` 已打印（`labelPrintedAt` 日期）。新建默认：`unlabeledTags`（衣服、运动服、鞋）为 none，其他 pending。打完标记 printed；「重新打印」回到 pending（编号不变）；改编号且要贴 → pending；关掉贴标签 → none（编号保留，已贴的照样能扫）。下载 Excel 不自动标记。
 - `reminderDays` 天内到期的「保质期」字段和 `warrantyExpires` 会在首页提醒；数据仓库里的 `.github/workflows/reminders.yml` 每周一建 issue @用户，GitHub 发通知邮件。
 - 编号永不复用：`assetHighWater` 记每类用到过的最大号（只增不减，`Store.save` 里统一更新），新号 = max(它, 现有最大) + 1，删除也不会让号回退。
-- 退役：扔掉/送人/丢失等用「归档」（`archived`、`archiveReason`、`archivedAt`），记录和编号都保留；「删除」只用于录错。消耗品（`consumable`，默认按 `consumableTags`）用完了把 `quantity` 设为 0（不归档），进「需要补货」；补货填新数量和保质期，编号不变，可选重新打印标签。用完的不做到期提醒。
+- 退役：扔掉/送人/丢失等用「归档」（`archived`、`archiveReason`、`archivedAt`），记录和编号都保留；「删除」只用于录错。消耗品（`consumable`，默认按 `consumableTags`）用完了把 `quantity` 设为 0（不归档），进「购物清单」；补货填新数量和保质期，编号不变，可选重新打印标签。用完的不做到期提醒。
 - 旧数据缺 `tagCodes` 等字段、或还是旧的 `labelPrinted` 布尔值时，`store.js` 的 `migrate()` 会补上/转换；`tools/import_items.py` 的 `migrate()` 做同样的转换，两边要保持一致。
 - 标签二维码内容：`https://threelu.github.io/inventory/?a=000-0123`。**改仓库名或网址会让已贴的标签全部失效。**
 - 照片文件名随机且写入后不改，网页会永久缓存；改照片要换新文件名。
@@ -48,8 +48,9 @@
 ## 外观和结构
 
 - 无印良品的生成り底色 + 苹果的系统字体、大标题、分组列表、毛玻璃底部导航，主色藤紫 `#7a68b0`（深色 `#b4a6e3`）。颜色都在 `css/app.css` 的 `:root` 里。图标是 `js/icons.js` 的细线 SVG。
-- 底部五栏：今天（首页：今天穿什么、问一问、需要注意）/ 物品（照片目录，默认；按位置；列表）/ ＋（新建、扫码、问一问）/ 衣橱（今天穿什么、穿着记录、出差、换季）/ 我的（标签、借阅、装箱、提醒、补货、统计、管理、设置）。
-- 暂缓、等和用户细聊的：购物清单、断舍离。
+- 底部五栏：今天（首页：今天穿什么、问一问、需要注意）/ 物品（照片目录，默认；按位置；列表）/ ＋（新建、扫码、问一问）/ 衣橱（今天穿什么、穿着记录、出差、换季）/ 我的（标签、借阅、装箱、清单模板、提醒、购物清单、统计、管理、设置）。
+- 暂缓、等和用户细聊的：断舍离（每季度一次）。
+- 页面右上角的「?」是 `helpButton(title, sections)`：用户说过有时不知道怎么操作，新功能的页面都配一份「怎么用」。
 
 ## AI 功能（都走 `js/ai.js` 的 `askJson`）
 
@@ -73,6 +74,15 @@
 - 出行（原「出差/旅行」）：`trip.kind` 出差/回家/其他；`checked` 计划、`out` 出发带走（装进行李箱，记 homeLocation）、`back` 回程找到。回程没找到的：落下了（`item.leftBehind`，首页提醒，找回来了/找不到了→归档丢失）、留在家里（位置改成「家」，`ensureHome`）、其实没带。
 - 清单模板 `data.lists = [{id,name,scene,items}]`：从物品勾选、扫码添加、出行「存成模板」。
 - 收纳袋：位置 `box: 'bag'`，常驻、`parent` 是平时放的柜子，里面的东西算在家（`isBox` 只认 move/trip）。行李箱装走时 homeLocation 是袋子，回来放回袋子。
+
+## 购物清单
+
+- 用户每周日去超市买一次生活必需品。`store.js` 的 `shoppingList(data)` 算出清单：消耗品用完的（quantity 0）、点过「快用完了」的（`item.runningLow` 日期）、数量 ≤ `item.lowAt`（「剩几件时进购物清单」，选填，能数的东西才设）、「保质期」14 天内到期的（买新的换掉），加上手动加的 `data.shopping.extra`。
+- `data.shopping = { extra: [{id,name,addedAt,note?}], skip: {key: 到哪天为止}, history: [{date,name,itemId?,price?}], toFile: [{id,name,price,date}], ai: {week,list} }`。key：物品 `i:<id>`，手动 `m:<id>`。「这周不买」= skip 7 天。
+- 在超市勾选只存在设备 localStorage（`inventory-shop-checked`），点「买回来了」才写仓库：物品填「现在有」几个（清掉 runningLow，可换保质期），手动加的从 extra 去掉，勾了「建档」的进 toFile（`#/new?name=..&shop=id` 建档后去掉）。价格记进 history，统计页按周显示花费。
+- 手动加的名字和档案里的消耗品同名时，直接标那件「快用完了」。问一问也能 `running_low{id}`、`shop{name}`。
+- AI 建议一周生成一次（按周日起算的 `shopWeek()`），存 `shopping.ai`，点「加入」才进清单。
+- 首页只在周六、周日提示；数据仓库 `.github/workflows/shopping.yml` 周日 01:00 UTC（北京 9 点）推送（`shopping_push.py`，规则和 `shoppingList` 一致，复用 `laundry_push.send`）。`#/restock` 旧链接跳到 `#/shopping`。
 
 ## 其他功能速记
 

@@ -202,6 +202,51 @@ export function isDepleted(item) {
   return Boolean(item.consumable && Number(item.quantity) === 0);
 }
 
+// ---------- 购物清单 ----------
+// 每周日去买一次。清单 = 用完的 + 点过「快用完了」的 + 剩余数量到提醒线的 + 14 天内过期要换新的 + 手动加的。
+// 每样有个 key（物品是 i:<id>，手动加的是 m:<id>），勾选状态只存在手机上，买回来才写进仓库。
+export const SHOP_EXPIRY_DAYS = 14;
+export function shoppingData(data) {
+  data.shopping ||= {};
+  const s = data.shopping;
+  s.extra ||= []; s.skip ||= {}; s.history ||= []; s.toFile ||= [];
+  return s;
+}
+// 这一周（从周日算起）的第一天，AI 建议一周生成一次就按它
+export function shopWeek(d = new Date()) {
+  const x = new Date(d);
+  x.setDate(x.getDate() - x.getDay());
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+}
+export function shoppingList(data, now = new Date()) {
+  const s = data.shopping || {};
+  const day = localDay();
+  const skipped = (key) => s.skip?.[key] && s.skip[key] > day;
+  const today0 = new Date(now); today0.setHours(0, 0, 0, 0);
+  const out = [];
+  for (const item of data.items) {
+    if (item.archived || item.borrow) continue;
+    const key = `i:${item.id}`;
+    if (skipped(key)) continue;
+    const qty = Number(item.quantity) || 0;
+    let why = null;
+    if (item.consumable && qty === 0) why = '已用完';
+    else if (item.consumable && item.runningLow) why = '快用完了';
+    else if (item.consumable && item.lowAt > 0 && qty <= item.lowAt) why = `只剩 ${qty}`;
+    let expiring = false;
+    const exp = parseDate(item.fields?.['保质期']);
+    if (!why && exp) {
+      const left = Math.round((exp - today0) / 86400000);
+      if (left <= SHOP_EXPIRY_DAYS) { why = left < 0 ? '已过期，买新的换掉' : `${item.fields['保质期']} 过期，买新的换掉`; expiring = true; }
+    }
+    if (why) out.push({ key, item, name: item.name, why, expiring });
+  }
+  for (const e of s.extra || []) {
+    if (!skipped(`m:${e.id}`)) out.push({ key: `m:${e.id}`, extra: e, name: e.name, why: e.note || '自己加的' });
+  }
+  return out;
+}
+
 // 新建时「贴标签」开关的默认值：类别是衣服、鞋这类就默认不贴。编号不受影响，每件都有。
 export function defaultLabel(data, tags) {
   return tags.length && data.unlabeledTags.includes(tags[0]) ? 'none' : 'pending';

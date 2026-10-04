@@ -230,16 +230,16 @@ def _(c):
     c.go(f"#/item/{med['id']}")
     p.get_by_role("button", name="用掉一个").click()
     expect(p.get_by_role("button", name="用掉一个")).to_have_count(0)
-    p.get_by_role("button", name="用完了").click()
-    expect(p.get_by_text("已用完，等补货")).to_be_visible()
-    c.go("#/")
-    expect(p.locator(".cell", has_text="1 件用完了")).to_be_visible()
-    c.go("#/restock")
+    p.get_by_role("button", name="用完了", exact=True).click()
+    expect(p.get_by_text("已用完，在购物清单上")).to_be_visible()
+    c.go("#/me")
+    expect(p.locator(".cell", has_text="购物清单")).to_contain_text("1")
+    c.go(f"#/item/{med['id']}")
     p.get_by_role("button", name="补货").click()
     p.locator(".sheet input[type=number]").fill("3")
     p.locator(".sheet input[placeholder^='例如']").fill("2028-06")
     p.locator(".sheet").get_by_role("button", name="补货").click()
-    expect(p.get_by_text("没有用完待补的东西")).to_be_visible()
+    expect(p.get_by_text("已用完，在购物清单上")).to_have_count(0)
     m = c.item("布洛芬片")
     assert m["quantity"] == 3 and m["fields"]["保质期"] == "2028-06" and m["assetId"] == "290-0001", m
 
@@ -618,6 +618,69 @@ def _(c):
     expect(p.get_by_role("textbox", name="编号")).to_have_value("110-0006")
 
 
+@step("购物清单：快用完了、手动加、AI 建议、这周不买、勾选、买回来了（补数量、记价格、建档）、剩几件提醒")
+def _(c):
+    p = c.page
+    med = c.item("布洛芬片")
+    c.go(f"#/item/{med['id']}")
+    p.get_by_role("button", name="快用完了").click()
+    expect(p.get_by_text("快用完了（")).to_be_visible()
+    c.go("#/shopping")
+    expect(p.locator(".shop-row", has_text="布洛芬片")).to_contain_text("快用完了")
+    p.get_by_role("button", name="怎么用").click()
+    expect(p.locator(".sheet")).to_contain_text("清单里的东西从哪来")
+    p.locator(".sheet").get_by_role("button", name="知道了").click()
+    ai = p.locator(".shop-ai")
+    expect(ai).to_contain_text("护手霜", timeout=20000)
+    p.get_by_label("加到购物清单").fill("鸡蛋、5号电池")
+    p.get_by_role("button", name="加入", exact=True).first.click()
+    expect(p.locator(".shop-row", has_text="5号电池")).to_be_visible()
+    ai.get_by_role("button", name="加入").click()
+    expect(p.locator(".shop-row", has_text="护手霜")).to_be_visible()
+    expect(ai).to_contain_text("这周没有别的要补充")
+    p.get_by_role("button", name="5号电池 更多").click()
+    p.locator(".sheet").get_by_role("button", name="这周不买").click()
+    expect(p.locator(".shop-row", has_text="5号电池")).to_have_count(0)
+    for name in ("布洛芬片", "鸡蛋", "护手霜"):
+        p.locator(".shop-row", has_text=name).click()
+    expect(p.locator(".shop-row.done")).to_have_count(3)
+    p.reload()  # 勾选存在手机上，刷新还在
+    p.get_by_role("button", name="买回来了（3 样）").click()
+    sheet = p.locator(".sheet")
+    expect(sheet.get_by_label("布洛芬片 现在有")).to_have_value(str(c.item("布洛芬片")["quantity"] + 1))
+    sheet.get_by_label("布洛芬片 现在有").fill("5")
+    sheet.get_by_label("布洛芬片 价格").fill("12.5")
+    sheet.get_by_label("鸡蛋 价格").fill("8")
+    sheet.get_by_label("护手霜 建档").check()
+    sheet.get_by_role("button", name="记好了").click()
+    expect(p.get_by_text("买回来还没建档")).to_be_visible()
+    d = c.data()
+    m = next(i for i in d["items"] if i["name"] == "布洛芬片")
+    sh = d["shopping"]
+    assert m["quantity"] == 5 and "runningLow" not in m, m
+    assert [e["name"] for e in sh["extra"]] == ["5号电池"] and "m:" + sh["extra"][0]["id"] in sh["skip"], sh
+    assert sorted((x["name"], x.get("price")) for x in sh["history"]) == sorted([("护手霜", None), ("布洛芬片", 12.5), ("鸡蛋", 8)]), sh["history"]
+    assert [e["name"] for e in sh["toFile"]] == ["护手霜"], sh
+    expect(p.get_by_text("这个月买东西花了 ¥21")).to_be_visible()
+    p.get_by_role("link", name="建档").click()
+    expect(p.get_by_label("名称")).to_have_value("护手霜")
+    p.get_by_label("位置").select_option(label="储物间 Storage Room")
+    p.get_by_role("button", name="洗漱护肤", exact=True).click()
+    p.get_by_role("button", name="保存", exact=True).click()
+    c.wait_item("护手霜")
+    assert c.data()["shopping"]["toFile"] == []
+    # 能数的消耗品：剩几件提醒
+    c.go(f"#/item/{med['id']}/edit")
+    p.get_by_label("剩几件提醒").fill("5")
+    p.get_by_role("button", name="保存", exact=True).click()
+    c.wait_item("布洛芬片")
+    assert c.item("布洛芬片")["lowAt"] == 5
+    c.go("#/shopping")
+    expect(p.locator(".shop-row", has_text="布洛芬片")).to_contain_text("只剩 5")
+    c.go("#/stats")
+    expect(p.get_by_text("购物花费")).to_be_visible()
+
+
 @step("换季整理：列出该收起来的，按勾选移动")
 def _(c):
     p = c.page
@@ -637,7 +700,11 @@ def _(c):
     card = p.locator(".card", has_text="常住城市")
     card.locator("input").fill("北京")
     card.get_by_role("button", name="保存").click()
-    expect(p.locator(".toast", has_text="已保存")).to_be_visible()
+    # 上一步的「已保存」提示可能还没消失，所以直接等数据写进去
+    for _ in range(50):
+        if c.data()["prefs"].get("homeCity") == "北京":
+            break
+        p.wait_for_timeout(200)
     assert c.data()["prefs"]["homeCity"] == "北京"
 
 
@@ -706,6 +773,8 @@ def fake_externals(page):
             ans = trip
         elif "搭配日常穿着" in system:
             ans = outfit
+        elif "去超市" in system:
+            ans = {"suggestions": [{"name": "护手霜", "reason": "降温了，手容易干"}]}
         elif "给宿舍里的物品建档" in system:
             ans = autofill
         else:

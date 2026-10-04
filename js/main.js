@@ -2,6 +2,7 @@ import { GitHub } from './github.js';
 import {
   Store, normalizeAssetId, newId, assertAssetFree, LOCATION_PREFIX,
   defaultLabel, setLabel, LABEL_TEXT, prefixForTags, defaultConsumable, isDepleted, ARCHIVE_REASONS,
+  shoppingData, shoppingList, shopWeek,
   isBox, isBag, ensureHome, moveItem, borrowStatus,
   INTIMATE_PARTS, laundryPrefs, laundryStatus, laundryBatches, localDay, setTodayWear, nextAssetInPrefix, nextTagCode, reminders,
 } from './store.js';
@@ -9,7 +10,7 @@ import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './ut
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
 import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay } from './outfit.js';
-import { seasonPlan, storageFor, nextTerm as nextSeasonTerm } from './season.js';
+import { seasonPlan, storageFor, currentTerm, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
 import { startScanner, assetFromScan } from './scan.js';
@@ -129,7 +130,8 @@ const routes = [
   [/^\/more$/, () => meView()],
   [/^\/labels$/, () => labelsView()],
   [/^\/reminders$/, () => remindersView()],
-  [/^\/restock$/, () => restockView()],
+  [/^\/shopping$/, () => shoppingView()],
+  [/^\/restock$/, () => { setTimeout(() => go('#/shopping', true)); return null; }],
   [/^\/borrow$/, () => borrowView()],
   [/^\/loans$/, () => borrowView()],
   [/^\/boxes$/, () => boxesView()],
@@ -154,7 +156,7 @@ const NAV_GROUPS = {
   '/': [/^\/?$/, /^\/ask/],
   '/items': [/^\/items/, /^\/places?/, /^\/item\//, /^\/new/, /^\/a\//, /^\/scan/],
   '/wardrobe': [/^\/wardrobe/, /^\/outfit/, /^\/wear/, /^\/laundry/, /^\/trips?/, /^\/season/, /^\/lists?/, /^\/check/],
-  '/me': [/^\/me/, /^\/more/, /^\/labels/, /^\/restock/, /^\/reminders/, /^\/stats/, /^\/manage/, /^\/settings/, /^\/boxes/, /^\/borrow/, /^\/loans/],
+  '/me': [/^\/me/, /^\/more/, /^\/labels/, /^\/restock/, /^\/shopping/, /^\/reminders/, /^\/stats/, /^\/manage/, /^\/settings/, /^\/boxes/, /^\/borrow/, /^\/loans/],
 };
 
 function setupNav() {
@@ -296,7 +298,7 @@ function fill(el, ...children) {
 }
 
 // 底部弹出的小表单。onConfirm 返回 false 表示不关闭（比如校验没过）
-function openSheet({ title, body, confirmText = '确定', onConfirm }) {
+function openSheet({ title, body, confirmText = '确定', cancelText = '取消', onConfirm }) {
   const close = () => overlay.remove();
   const overlay = h('div', { class: 'sheet-overlay', onclick: (e) => { if (e.target === overlay) close(); } },
     h('div', { class: 'sheet' },
@@ -304,7 +306,7 @@ function openSheet({ title, body, confirmText = '确定', onConfirm }) {
       body,
       h('div', { class: 'actions' },
         h('button', { onclick: async () => { if ((await onConfirm()) !== false) close(); } }, confirmText),
-        h('button', { class: 'secondary', onclick: close }, '取消'))));
+        cancelText ? h('button', { class: 'secondary', onclick: close }, cancelText) : null)));
   document.body.append(overlay);
   overlay.querySelector('input, textarea')?.focus();
 }
@@ -543,8 +545,9 @@ function itemView(id) {
     it.quantity = Math.max(0, (Number(it.quantity) || 1) - 1);
     if (it.quantity === 0) note(it, '用完');
   });
-  const useUp = () => confirm(`「${item.name}」用完了？\n会放进「需要补货」清单，编号和记录都保留。`)
-    && update(`用完：${item.name}`, (it) => { it.quantity = 0; note(it, '用完'); });
+  const useUp = () => confirm(`「${item.name}」用完了？\n会放进购物清单，编号和记录都保留。`)
+    && update(`用完：${item.name}`, (it) => { it.quantity = 0; delete it.runningLow; note(it, '用完'); });
+  const runLow = (on) => update(`${on ? '快用完了' : '还够用'}：${item.name}`, (it) => { if (on) it.runningLow = today(); else delete it.runningLow; });
   const restock = () => openRestock(item);
   const bs = borrowStatus(item);
   const renew = () => {
@@ -580,7 +583,8 @@ function itemView(id) {
 
   return h('div', {},
     item.archived ? h('div', { class: 'banner' }, `已归档${item.archiveReason ? `：${item.archiveReason}` : ''}${item.archivedAt ? `（${item.archivedAt}）` : ''}`) : null,
-    isDepleted(item) && !item.archived ? h('div', { class: 'banner warn' }, '已用完，等补货') : null,
+    isDepleted(item) && !item.archived ? h('div', { class: 'banner warn' }, '已用完，在购物清单上') : null,
+    item.runningLow && !isDepleted(item) && !item.archived ? h('div', { class: 'banner soon' }, `快用完了（${item.runningLow.slice(5)} 标记），在购物清单上`) : null,
     item.laundry && !item.archived ? h('div', { class: 'banner' }, item.laundry.autoReturn ? '贴身衣物，今天在洗，明天自动收回' : `${LAUNDRY_TEXT[item.laundry.state]}（${item.laundry.since.slice(5)} 起）`) : null,
     bs ? h('div', { class: `banner ${bs.overdue ? 'warn' : bs.soon ? 'soon' : ''}` },
       `借自${item.borrow.from}，${item.borrow.due} 前还`, bs.overdue ? `，已逾期 ${-bs.left} 天` : `，还剩 ${bs.left} 天`) : null,
@@ -613,6 +617,8 @@ function itemView(id) {
       h('a', { class: 'button', href: `#/item/${id}/edit` }, '编辑'),
       item.consumable && !item.archived ? [
         item.quantity > 1 ? h('button', { class: 'secondary', onclick: useOne }, '用掉一个') : null,
+        isDepleted(item) ? null : item.runningLow ? h('button', { class: 'secondary', onclick: () => runLow(false) }, '还够用')
+          : h('button', { class: 'secondary', onclick: () => runLow(true) }, '快用完了'),
         isDepleted(item) ? null : h('button', { class: 'secondary', onclick: useUp }, '用完了'),
         h('button', { class: isDepleted(item) ? '' : 'secondary', onclick: restock }, '补货'),
       ] : null,
@@ -659,6 +665,7 @@ function openRestock(item) {
         const it = data.items.find((i) => i.id === item.id);
         if (!it) throw new Error('这件物品已经在别处被删除了');
         it.quantity = n;
+        delete it.runningLow;
         if (exp) it.fields = { ...it.fields, 保质期: exp };
         if (reprint.checked && it.label !== 'none') setLabel(it, 'pending');
         it.purchaseDate = today();
@@ -678,7 +685,7 @@ function formView(id, q = {}) {
   const source = q.from ? store.item(q.from) : null; // 「复制」：从这件物品带出字段
   const itemId = existing?.id || newId('i');
   const blank = {
-    id: itemId, name: '', assetId: null, location: q.loc || '',
+    id: itemId, name: q.name || '', assetId: null, location: q.loc || '',
     tags: q.tags ? q.tags.split(',').filter((t) => store.data.tags.includes(t)) : [],
     quantity: 1, description: '', fields: {}, photos: [], receipts: [],
     manufacturer: '', modelNumber: '', serialNumber: '', purchaseDate: '', purchasePrice: null,
@@ -781,10 +788,16 @@ function formView(id, q = {}) {
   };
   drawLabelStatus();
 
+  // 剩几件进购物清单：只对能数的消耗品有意义（抽纸 6 包、电池 4 节）；一瓶一支的用物品页的「快用完了」
+  const lowRow = h('label', { class: 'low-row' }, '剩几件时进购物清单',
+    h('input', { type: 'number', min: 1, inputmode: 'numeric', placeholder: '选填，不填就等用完再提醒', 'aria-label': '剩几件提醒',
+      value: draft.lowAt || '', oninput: (e) => { draft.lowAt = e.target.value; } }));
+  const syncLow = () => { lowRow.hidden = !wantConsumable; };
   const consumableSwitch = h('input', {
     type: 'checkbox', checked: wantConsumable,
-    onchange: (e) => { wantConsumable = e.target.checked; consumableTouched = true; },
+    onchange: (e) => { wantConsumable = e.target.checked; consumableTouched = true; syncLow(); },
   });
+  syncLow();
 
   // ---- 照片 ----
   const photoSection = (kind, title) => {
@@ -833,6 +846,7 @@ function formView(id, q = {}) {
         if (!consumableTouched) {
           wantConsumable = defaultConsumable(store.data, draft.tags);
           consumableSwitch.checked = wantConsumable;
+          syncLow();
         }
       },
     }, t)));
@@ -890,7 +904,7 @@ function formView(id, q = {}) {
         if (!row) fieldRows.push({ k, v: String(v) });
         else if (!String(row.v).trim()) row.v = String(v); // 已经填了的不覆盖
       }
-      if (typeof out.consumable === 'boolean') { wantConsumable = out.consumable; consumableSwitch.checked = out.consumable; consumableTouched = true; }
+      if (typeof out.consumable === 'boolean') { wantConsumable = out.consumable; consumableSwitch.checked = out.consumable; consumableTouched = true; syncLow(); }
       drawFields();
       suggestBox.hidden = true;
       toast('已填好，看看对不对');
@@ -922,6 +936,8 @@ function formView(id, q = {}) {
     // 消耗品数量可以是 0（用完了）；其他东西至少 1
     const n = Number(draft.quantity);
     draft.quantity = wantConsumable ? (Number.isFinite(n) && n >= 0 ? n : 1) : Math.max(1, n || 1);
+    const low = Math.floor(Number(draft.lowAt));
+    if (wantConsumable && low >= 1) draft.lowAt = low; else delete draft.lowAt;
     draft.purchasePrice = draft.purchasePrice === '' || draft.purchasePrice == null ? null : Number(draft.purchasePrice);
     draft.fields = Object.fromEntries(fieldRows.filter((r) => r.k.trim() && String(r.v).trim()).map((r) => [r.k.trim(), String(r.v).trim()]));
     for (const k of ['manufacturer', 'modelNumber', 'serialNumber', 'purchaseFrom', 'description', 'notes']) {
@@ -971,6 +987,8 @@ function formView(id, q = {}) {
           moveItem(data, data.items[i], target);
         } else {
           data.items.push({ ...record, createdAt: now, updatedAt: now });
+          // 从购物清单「买回来了」点进来建档的：建好就从「还没建档」里去掉
+          if (q.shop && data.shopping?.toFile) data.shopping.toFile = data.shopping.toFile.filter((e) => e.id !== q.shop);
         }
         return record.assetId;
       }, { uploads, removes: removed.flatMap((p) => [p.file, p.thumb]) });
@@ -996,7 +1014,7 @@ function formView(id, q = {}) {
     h('div', { class: 'label' }, '编号', h('div', { class: 'asset-row' }, assetInput, suggestBtn), renumberBtn, assetMsg),
     h('div', { class: 'label' }, h('label', { class: 'switch-row' }, labelSwitch, '贴标签'), labelStatus),
     h('div', { class: 'label' }, h('label', { class: 'switch-row' }, consumableSwitch, '消耗品'),
-      h('div', { class: 'hint' }, '会用完、还会再买的东西。用完了不归档，进「需要补货」，补货后编号不变。')),
+      h('div', { class: 'hint' }, '会用完、还会再买的东西。用完了不归档，进「购物清单」，买回来编号不变。'), lowRow),
     h('label', {}, '数量', bind('quantity', { type: 'number', min: 0, inputmode: 'numeric' })),
     h('div', { class: 'label' }, '其他信息', fieldBox),
     h('label', {}, '描述', bind('description', { multiline: true, rows: 2 })),
@@ -1215,7 +1233,7 @@ function meView() {
   const pending = store.pendingLabels().length;
   const due = reminders(store.data).length;
   const borrowDue = store.data.items.filter((i) => !i.archived && borrowStatus(i)?.soon).length;
-  const depleted = store.data.items.filter((i) => isDepleted(i) && !i.archived).length;
+  const shopping = shoppingList(store.data).length;
   return h('div', {},
     header('我的'),
     h('div', { class: 'group' },
@@ -1227,7 +1245,7 @@ function meView() {
     h('div', { class: 'section-title' }, '提醒和统计'),
     h('div', { class: 'group' },
       cell({ href: '#/reminders', ic: 'clock', color: 'var(--danger)', title: '到期提醒', count: due || null }),
-      cell({ href: '#/restock', ic: 'restock', color: 'var(--amber)', title: '需要补货', count: depleted || null }),
+      cell({ href: '#/shopping', ic: 'cart', color: 'var(--amber)', title: '购物清单', count: shopping || null }),
       cell({ href: '#/stats', ic: 'chart', color: '#5f7fa8', title: '统计' })),
     h('div', { class: 'section-title' }, '设置'),
     h('div', { class: 'group' },
@@ -1278,8 +1296,9 @@ function notices() {
   }
   const lost = store.data.items.filter((i) => i.leftBehind && !i.archived);
   if (lost.length) out.push({ href: `#/item/${lost[0].id}`, ic: 'suitcase', color: 'var(--danger)', title: `${lost.length} 件东西落在外面了`, meta: `${lost[0].name} · ${lost[0].leftBehind.place}` });
-  const depleted = store.data.items.filter((i) => isDepleted(i) && !i.archived);
-  if (depleted.length) out.push({ href: '#/restock', ic: 'restock', color: 'var(--amber)', title: `${depleted.length} 件用完了`, meta: depleted[0].name });
+  // 购物清单：周六、周日（去超市前后）才在首页提
+  const shop = [0, 6].includes(new Date().getDay()) ? shoppingList(store.data) : [];
+  if (shop.length) out.push({ href: '#/shopping', ic: 'cart', color: 'var(--amber)', title: `这周要买 ${shop.length} 样`, meta: shop.slice(0, 2).map((e) => e.name).join('、') });
   const trips = store.data.trips.filter((t) => t.status === 'packed');
   if (trips.length) out.push({ href: `#/trip/${trips[0].id}`, ic: 'suitcase', color: '#5f7fa8', title: '行李箱里还有东西', meta: trips[0].city });
   const pending = store.pendingLabels().length;
@@ -1663,6 +1682,8 @@ const ACTIONS = {
   return_book: { text: (a) => `《${store.item(a.id)?.name}》已归还`, ok: (a) => store.item(a.id)?.borrow },
   renew: { text: (a) => `《${store.item(a.id)?.name}》续借到 ${a.due}`, ok: (a) => store.item(a.id)?.borrow && /^\d{4}-\d{2}-\d{2}$/.test(a.due) },
   set_field: { text: (a) => `「${store.item(a.id)?.name}」的${a.field}改成 ${a.value}`, ok: (a) => store.item(a.id) && a.field && a.value != null },
+  running_low: { text: (a) => `「${store.item(a.id)?.name}」快用完了，放进购物清单`, ok: (a) => store.item(a.id)?.consumable },
+  shop: { text: (a) => `购物清单加上：${a.name}`, ok: (a) => typeof a.name === 'string' && a.name.trim() },
   wear: { text: (a) => `记下今天穿了：${(a.ids || []).map((id) => store.item(id)?.name).join('、')}`, ok: (a) => (a.ids || []).every((id) => store.item(id)) },
 };
 
@@ -1670,10 +1691,13 @@ function applyAction(data, a) {
   const it = data.items.find((i) => i.id === a.id);
   const note = (text) => { it.notes = [it.notes, `${today()} ${text}`].filter(Boolean).join('\n'); };
   const now = new Date().toISOString();
+  if (a.type === 'shop') { addToShopping(data, [a.name.trim()]); return; }
   switch (a.type) {
     case 'move': moveItem(data, it, a.to); break;
-    case 'use_up': it.quantity = 0; note('用完'); break;
+    case 'use_up': it.quantity = 0; delete it.runningLow; note('用完'); break;
+    case 'running_low': it.runningLow = today(); break;
     case 'restock':
+      delete it.runningLow;
       it.quantity = Number(a.qty);
       if (a.expiry) it.fields = { ...it.fields, 保质期: a.expiry };
       note(`补货 ×${a.qty}${a.expiry ? `，保质期 ${a.expiry}` : ''}`);
@@ -1700,9 +1724,9 @@ async function askInventory(question) {
     '你是用户宿舍物品档案的助手，用中文简洁地回答。下面是全部物品和位置，只根据这些回答；查不到就直说没有，不要编。',
     `今天是 ${todayStr()}。`,
     '回答里提到具体物品时，把它们的 id 放进 items（最多 8 个），界面会显示成卡片。',
-    '用户要求修改档案时（比如移动位置、用完了、补货、归档、还书、续借、改字段、记录今天穿了什么），不要说已经改了，',
+    '用户要求修改档案时（比如移动位置、用完了、快用完了、补货、加到购物清单、归档、还书、续借、改字段、记录今天穿了什么），不要说已经改了，',
     '而是把要做的修改放进 actions，界面会让用户确认后再执行。只能用这些类型：',
-    'move{id,to(位置id)}、use_up{id}、restock{id,qty,expiry?}、archive{id,reason(扔掉/用完不再买/送人/卖掉/丢失/坏了/其他)}、',
+    'move{id,to(位置id)}、use_up{id}、running_low{id}（档案里的消耗品快用完了）、shop{name}（档案里没有的东西加到购物清单）、restock{id,qty,expiry?}、archive{id,reason(扔掉/用完不再买/送人/卖掉/丢失/坏了/其他)}、',
     'return_book{id}、renew{id,due(YYYY-MM-DD)}、set_field{id,field,value}、wear{ids}。',
     '关于药品：只回答有没有、在哪、过没过期，不给用药建议（吃什么、吃多少），遇到这类问题提醒看说明书或问医生。',
     '只输出 JSON：{"answer":"","items":["id"],"actions":[{"type":"","id":""}]}',
@@ -1955,17 +1979,238 @@ function labelView(type, id) {
           : null)));
 }
 
-// ---------- 需要补货 ----------
+// ---------- 购物清单 ----------
 
-function restockView() {
-  const list = store.data.items.filter((i) => isDepleted(i) && !i.archived)
-    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+// 在超市勾掉的只存在这台手机上（一勾一提交太慢），点「买回来了」才写进仓库
+const SHOP_CHECKED = 'inventory-shop-checked';
+const shopChecked = new Set((() => { try { return JSON.parse(localStorage.getItem(SHOP_CHECKED)) || []; } catch { return []; } })());
+const persistChecked = () => { try { localStorage.setItem(SHOP_CHECKED, JSON.stringify([...shopChecked])); } catch { /* 存不了就只在这次打开里有效 */ } };
+const shopState = { generating: null, error: '' };
+
+// 手动加：名字和档案里还在用的消耗品一样，就当作那件「快用完了」，买回来能直接补数量
+function addToShopping(data, names) {
+  const sh = shoppingData(data);
+  const same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  for (const name of names) {
+    const it = data.items.find((i) => !i.archived && i.consumable && same(i.name, name));
+    if (it) { if (Number(it.quantity) > 0) it.runningLow = today(); delete sh.skip[`i:${it.id}`]; continue; }
+    if (sh.extra.some((e) => same(e.name, name))) continue;
+    sh.extra.push({ id: newId('s'), name, addedAt: today() });
+  }
+}
+
+const SHOP_HELP = [
+  ['清单里的东西从哪来', [
+    '用完了的消耗品：物品页点「用完了」。',
+    '快用完的：洗发水这种一瓶一支数不了的，快见底时在物品页点「快用完了」；抽纸、电池这种能数的，编辑物品时填「剩几件时进购物清单」，用到那个数自动进来。',
+    '快过期的：保质期 14 天内到期的，提醒你买新的换掉。',
+    '自己加的：在上面的框里打字，点「加入」。一次加几样用逗号或顿号隔开，比如「鸡蛋、5 号电池」。',
+    'AI 建议：每周看一次天气和你的档案，觉得该买的列在下面，点「加入」才进清单。',
+  ]],
+  ['在超市', [
+    '买到一样就点一下那一行，打上勾；点错了再点一下取消。',
+    '某样这周不想买：点右边的「⋯」→「这周不买」，下周还会出现。',
+  ]],
+  ['回到宿舍', [
+    '点最下面的「买回来了」。档案里有的东西填一下现在有多少（快过期的顺便填新保质期），价格想填就填。',
+    '档案里没有的新东西可以打开「建档」，保存后会列在清单下面的「还没建档」，点进去补照片和位置；鸡蛋这种吃完就没的，不用建档。',
+  ]],
+  ['提醒', [
+    '每周日早上 9 点，清单不是空的就推送到手机。也可以在问一问里说「洗衣液快用完了」「购物清单加上牙线」。',
+  ]],
+];
+
+// 页面右上角的「?」：怎么用。sections = [[小标题, [一句一句]]]
+function helpButton(title, sections) {
+  return h('button', { class: 'icon-btn help-btn', 'aria-label': '怎么用', onclick: () => openSheet({
+    title,
+    body: h('div', { class: 'help' }, sections.map(([t, lines]) => [h('h4', {}, t), h('ul', {}, lines.map((l) => h('li', {}, l)))])),
+    confirmText: '知道了', cancelText: null, onConfirm: () => {},
+  }) }, '?');
+}
+
+// 底部弹出的一列按钮
+function actionSheet(title, actions) {
+  const close = () => overlay.remove();
+  const overlay = h('div', { class: 'sheet-overlay', onclick: (e) => { if (e.target === overlay) close(); } },
+    h('div', { class: 'sheet' }, h('h3', {}, title),
+      h('div', { class: 'group' }, actions.filter(Boolean).map(([text, fn, danger]) =>
+        h('button', { class: `cell${danger ? ' danger-text' : ''}`, type: 'button', onclick: () => { close(); fn(); } }, h('span', { class: 'grow' }, text)))),
+      h('div', { class: 'actions' }, h('button', { class: 'secondary', onclick: close }, '取消'))));
+  document.body.append(overlay);
+}
+
+async function generateShopAi() {
+  const d = store.data;
+  const ai = readAi();
+  const w = await getWeather().catch(() => null);
+  const history = (d.shopping?.history || []).filter((x) => x.date >= localDay(-90)).map((x) => `${x.date} ${x.name}`);
+  const system = [
+    '你是一个男大学生的宿舍生活助手。他每周日去超市买一次生活必需品。',
+    '根据季节、天气、他的物品档案和最近的购物记录，提醒这周可能需要买、但还不在清单上的生活必需品。',
+    '规则：最多 5 条；已经在清单上的不要；档案里有、数量够、没用完的不要；宿舍没有厨房和电器，不建议做饭用品；',
+    '药品只说「备一点」，不给用药建议；没有特别需要就少说，可以一条都没有。',
+    'name 写要买的东西（简短，比如「护手霜」），reason 一句话说为什么（20 字以内）。',
+    '只输出 JSON：{"suggestions":[{"name":"","reason":""}]}',
+  ].join('\n');
+  const user = [
+    `今天 ${todayStr()} ${WEEKDAY[new Date().getDay()]}，节气：${currentTerm().name}之后。`,
+    w ? `天气：${weatherLine(w)}` : '',
+    `清单上已有：${shoppingList(d).map((e) => e.name).join('、') || '（空）'}`,
+    `最近 90 天买过：${history.join('；') || '（没有记录）'}`,
+    '档案里的消耗品（id | 编号 | 名称 | 类别 | 位置 | 数量 | 字段 | 状态）：',
+    ...d.items.filter((i) => i.consumable && !i.archived).map((i) => itemLine(d, i)),
+    `其他类别：${[...new Set(d.items.filter((i) => !i.archived && !i.consumable).map((i) => i.tags[0]).filter(Boolean))].join('、')}`,
+  ].filter(Boolean).join('\n');
+  const out = await askJson(ai, system, user, { maxTokens: 6000, timeout: 90000 });
+  const list = (Array.isArray(out.suggestions) ? out.suggestions : [])
+    .filter((x) => x && typeof x.name === 'string' && x.name.trim())
+    .slice(0, 5).map((x) => ({ name: x.name.trim().slice(0, 30), reason: String(x.reason || '').slice(0, 60) }));
+  await store.save(`购物清单 AI 建议（${shopWeek()}）`, (data) => { shoppingData(data).ai = { week: shopWeek(), list }; });
+}
+
+function shopAiCard() {
+  if (!readAi().key) return null;
+  const s = store.data.shopping || {};
+  const fresh = s.ai?.week === shopWeek();
+  if (!fresh && !shopState.generating && !shopState.error) {
+    shopState.generating = generateShopAi()
+      .catch((e) => { shopState.error = e.message; })
+      .finally(() => { shopState.generating = null; if (/^\/shopping/.test(currentPath())) render(); });
+  }
+  const retry = () => { shopState.error = ''; render(); };
+  const list = fresh ? s.ai.list : [];
+  const save = (message, fn) => saving('正在保存…', () => store.save(message, (data) => fn(shoppingData(data), data))).then(render).catch(() => {});
+  const drop = (sh, name) => { if (sh.ai) sh.ai.list = sh.ai.list.filter((x) => x.name !== name); };
+  return h('div', { class: 'card shop-ai' },
+    h('h3', {}, icon('sparkle'), ' AI 建议'),
+    shopState.generating ? h('p', { class: 'muted small' }, '正在看天气和你的档案……')
+      : shopState.error ? h('p', { class: 'muted small' }, shopState.error, ' ', h('button', { class: 'link', onclick: retry }, '重试'))
+        : !list.length ? h('p', { class: 'muted small' }, '这周没有别的要补充。')
+          : list.map((x) => h('div', { class: 'check-item' },
+            h('span', { class: 'grow' }, x.name, h('span', { class: 'muted small block' }, x.reason)),
+            h('button', { class: 'small', onclick: () => save(`购物清单加上：${x.name}（AI 建议）`, (sh, data) => { addToShopping(data, [x.name]); drop(sh, x.name); }) }, '加入'),
+            h('button', { class: 'small secondary', onclick: () => save(`不采用 AI 建议：${x.name}`, (sh) => drop(sh, x.name)) }, '不用'))));
+}
+
+// 买回来了：档案里有的补数量（快过期的换新保质期），手动加的可以顺手建档；价格选填，记进购物记录
+function openBought(entries) {
+  const rows = entries.map((e) => {
+    const it = e.item;
+    const hasExpiry = it && (it.fields?.['保质期'] !== undefined || it.tags.some((t) => (store.data.fieldPresets?.[t] || []).includes('保质期')));
+    const startQty = !it ? null : e.expiring || isDepleted(it) ? 1 : (Number(it.quantity) || 0) + 1;
+    const r = {
+      e,
+      qty: it ? h('input', { type: 'number', min: 1, inputmode: 'numeric', value: startQty, 'aria-label': `${e.name} 现在有` }) : null,
+      expiry: hasExpiry ? h('input', { class: 'span2', placeholder: '新保质期（选填），如 2027-05', 'aria-label': `${e.name} 新保质期` }) : null,
+      price: h('input', { type: 'number', min: 0, step: '0.01', inputmode: 'decimal', placeholder: '价格（选填）', 'aria-label': `${e.name} 价格` }),
+      file: !it ? h('input', { type: 'checkbox', 'aria-label': `${e.name} 建档` }) : null,
+    };
+    r.el = h('div', { class: 'bought-row' },
+      h('div', { class: 'bought-name' }, e.name, h('span', { class: 'muted small' }, ` ${e.why}`)),
+      h('div', { class: 'bought-inputs' },
+        r.qty ? h('label', {}, '现在有', r.qty) : null,
+        r.price, r.expiry,
+        r.file ? h('label', { class: 'switch-row small' }, r.file, '建档') : null));
+    return r;
+  });
+  openSheet({
+    title: `买回来了（${entries.length} 样）`,
+    body: h('div', { class: 'form' }, rows.map((r) => r.el),
+      h('p', { class: 'muted small' }, '「现在有」是买回来后一共有几个（快过期的旧的扔掉不算）。没勾的东西留在清单上。')),
+    confirmText: '记好了',
+    onConfirm: async () => {
+      for (const r of rows) {
+        if (r.qty && !(Number(r.qty.value) >= 1)) { toast(`${r.e.name}：数量至少是 1`, 'error'); return false; }
+      }
+      const date = today();
+      await saving('正在保存…', () => store.save(`买回来了：${entries.map((e) => e.name).join('、')}`, (data) => {
+        const sh = shoppingData(data);
+        for (const r of rows) {
+          const price = r.price.value === '' ? null : Number(r.price.value);
+          const rec = { date, name: r.e.name };
+          if (price != null && Number.isFinite(price)) rec.price = price;
+          if (r.e.item) {
+            const it = data.items.find((i) => i.id === r.e.item.id);
+            if (!it) continue;
+            const n = Number(r.qty.value);
+            const exp = r.expiry?.value.trim();
+            it.quantity = n;
+            delete it.runningLow;
+            if (exp) it.fields = { ...it.fields, 保质期: exp };
+            it.purchaseDate = date;
+            it.updatedAt = new Date().toISOString();
+            it.notes = [it.notes, `${date} 买回来，现在 ×${n}${exp ? `，保质期 ${exp}` : ''}${rec.price != null ? `，¥${rec.price}` : ''}`].filter(Boolean).join('\n');
+            rec.itemId = it.id;
+          } else {
+            sh.extra = sh.extra.filter((x) => x.id !== r.e.extra.id);
+            if (r.file.checked) sh.toFile.push({ id: r.e.extra.id, name: r.e.name, price: rec.price ?? null, date });
+          }
+          delete sh.skip[r.e.key];
+          sh.history.push(rec);
+        }
+      }));
+      for (const e of entries) shopChecked.delete(e.key);
+      persistChecked();
+      toast(`记好了 ${entries.length} 样`);
+      render();
+    },
+  });
+}
+
+function shoppingView() {
+  const list = shoppingList(store.data);
+  const s = store.data.shopping || {};
+  const keys = new Set(list.map((e) => e.key));
+  for (const k of [...shopChecked]) if (!keys.has(k)) shopChecked.delete(k); // 已经不在清单上的勾去掉
+  persistChecked();
+  const checked = list.filter((e) => shopChecked.has(e.key));
+  const save = (message, fn) => saving('正在保存…', () => store.save(message, (data) => fn(shoppingData(data), data))).then(render).catch(() => {});
+
+  const input = h('input', { placeholder: '想买什么？如 鸡蛋、5 号电池', 'aria-label': '加到购物清单', enterkeyhint: 'done',
+    onkeydown: (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); add(); } } });
+  const add = () => {
+    const names = input.value.split(/[，,、\n]/).map((t) => t.trim()).filter(Boolean);
+    if (!names.length) return toast('先写要买什么', 'error');
+    save(`购物清单加上：${names.join('、')}`, (sh, data) => addToShopping(data, names));
+  };
+  const toggle = (e) => {
+    if (shopChecked.has(e.key)) shopChecked.delete(e.key); else shopChecked.add(e.key);
+    persistChecked();
+    render();
+  };
+  const more = (e) => actionSheet(e.name, [
+    e.item ? ['看看这件', () => go(`#/item/${e.item.id}`)] : null,
+    e.item?.runningLow && Number(e.item.quantity) > 0 ? ['还够用，不用买', () => save(`还够用：${e.name}`, (sh, data) => { delete data.items.find((i) => i.id === e.item.id).runningLow; })] : null,
+    ['这周不买（下周再提醒）', () => save(`这周不买：${e.name}`, (sh) => { sh.skip[e.key] = localDay(7); })],
+    e.extra ? ['从清单删掉', () => save(`购物清单删掉：${e.name}`, (sh) => { sh.extra = sh.extra.filter((x) => x.id !== e.extra.id); }), true] : null,
+  ]);
+  const row = (e) => {
+    const on = shopChecked.has(e.key);
+    return h('div', { class: `shop-row${on ? ' done' : ''}`, role: 'checkbox', 'aria-checked': String(on), tabindex: 0,
+      onclick: () => toggle(e), onkeydown: (ev) => { if (ev.key === ' ' || ev.key === 'Enter') { ev.preventDefault(); toggle(e); } } },
+    h('span', { class: 'shop-tick' }, on ? '✓' : ''),
+    h('span', { class: 'grow' }, e.name, h('span', { class: `small block ${e.expiring || e.why === '已用完' ? 'warn-text' : 'muted'}` }, e.why)),
+    h('button', { class: 'link more-btn', 'aria-label': `${e.name} 更多`, onclick: (ev) => { ev.stopPropagation(); more(e); } }, '⋯'));
+  };
+  const toFile = s.toFile || [];
+  const month = localDay().slice(0, 7);
+  const spent = (s.history || []).filter((x) => x.date.startsWith(month) && x.price != null).reduce((a, x) => a + x.price, 0);
+
   return h('div', {},
-    header('需要补货'),
-    h('p', { class: 'muted small' }, '用完了的消耗品。买回来后点「补货」填数量和新保质期，编号不变；以后不打算再买，就去物品页归档。'),
-    list.length ? h('div', { class: 'list' }, list.map((i) => h('div', { class: 'restock-row' },
-      itemRow(i), h('button', { class: 'small', onclick: () => openRestock(i) }, '补货'))))
-      : h('div', { class: 'card' }, h('p', {}, '没有用完待补的东西。')));
+    headerSub('购物清单', list.length ? `这周要买 ${list.length} 样${checked.length ? `，已买 ${checked.length}` : ''}` : '目前没有要买的',
+      helpButton('购物清单怎么用', SHOP_HELP)),
+    h('form', { class: 'add-row', onsubmit: (e) => { e.preventDefault(); add(); } }, input, h('button', { class: 'small' }, '加入')),
+    list.length ? h('div', { class: 'card shop-list' }, [...list.filter((e) => !shopChecked.has(e.key)), ...checked].map(row))
+      : h('div', { class: 'card' }, h('p', { class: 'muted' }, '没有用完、快用完或快过期的东西。想买什么直接在上面加。')),
+    checked.length ? h('div', { class: 'actions sticky' }, h('button', { onclick: () => openBought(checked) }, `买回来了（${checked.length} 样）`)) : null,
+    toFile.length ? [h('div', { class: 'section-title' }, '买回来还没建档'), h('div', { class: 'card' }, toFile.map((e) => h('div', { class: 'check-item' },
+      h('span', { class: 'grow' }, e.name, h('span', { class: 'muted small block' }, `${e.date.slice(5)} 买的`)),
+      h('a', { class: 'button small', href: `#/new?name=${encodeURIComponent(e.name)}&shop=${e.id}` }, '建档'),
+      h('button', { class: 'small secondary', onclick: () => save(`不建档：${e.name}`, (sh) => { sh.toFile = sh.toFile.filter((x) => x.id !== e.id); }) }, '不用了'))))] : null,
+    shopAiCard(),
+    h('p', { class: 'muted small center' }, '每周日早上 9 点推送清单到手机',
+      spent ? [' · ', h('a', { href: '#/stats' }, `这个月买东西花了 ¥${Math.round(spent)}`)] : null));
 }
 
 // ---------- 到期提醒 ----------
@@ -2000,7 +2245,7 @@ function statsView() {
     return h('div', { class: 'bars' }, rows.map((r) => h('a', { class: 'bar-row', href: r.href },
       h('span', { class: 'bar-label' }, r.label),
       h('span', { class: 'bar-track' }, h('span', { class: 'bar', style: `width:${(r.count / max) * 100}%` })),
-      h('span', { class: 'bar-num' }, r.count, r.value ? h('small', {}, ` ${money(r.value)}`) : null))));
+      h('span', { class: 'bar-num' }, r.text ?? r.count, r.value ? h('small', {}, ` ${money(r.value)}`) : null))));
   };
   const byTag = store.data.tags
     .map((t) => { const list = items.filter((i) => i.tags[0] === t); return { label: t, count: list.length, value: value(list), href: `#/?tag=${encodeURIComponent(t)}` }; })
@@ -2015,6 +2260,16 @@ function statsView() {
   const byReason = ARCHIVE_REASONS.map((r) => ({ label: r, count: archivedItems.filter((i) => (i.archiveReason || '其他') === r).length, href: '#/' }))
     .filter((r) => r.count);
   const noPhoto = items.filter((i) => !i.photos?.length).length;
+  // 购物花费：最近 8 周，按周日开始算一周（只算买回来时填了价格的）
+  const bought = (store.data.shopping?.history || []).filter((x) => x.price != null);
+  const weeks = Array.from({ length: 8 }, (_, n) => shopWeek(new Date(Date.now() - n * 7 * 86400000)));
+  const byWeek = weeks.map((w, n) => {
+    const end = n ? weeks[n - 1] : '9999';
+    const sum = bought.filter((x) => x.date >= w && x.date < end).reduce((a, x) => a + x.price, 0);
+    return { label: n ? `${w.slice(5)} 周` : '这周', count: sum, text: money(sum), href: '#/shopping' };
+  });
+  const month = localDay().slice(0, 7);
+  const monthSum = bought.filter((x) => x.date.startsWith(month)).reduce((a, x) => a + x.price, 0);
 
   return h('div', {},
     header('统计'),
@@ -2027,6 +2282,8 @@ function statsView() {
     h('div', { class: 'card' }, h('h3', {}, '按类别'), byTag.length ? bars(byTag) : h('p', { class: 'muted' }, '还没有物品'),
       untagged ? h('p', { class: 'muted small' }, `另有 ${untagged} 件没有类别`) : null),
     h('div', { class: 'card' }, h('h3', {}, '按位置'), byPlace.length ? bars(byPlace) : h('p', { class: 'muted' }, '还没有物品')),
+    bought.length ? h('div', { class: 'card' }, h('h3', {}, `购物花费 · 这个月 ${money(monthSum)}`), bars(byWeek),
+      h('p', { class: 'muted small' }, '只算「买回来了」时填了价格的')) : null,
     byReason.length ? h('div', { class: 'card' }, h('h3', {}, `已归档（${archived}）`), bars(byReason)) : null,
     h('p', { class: 'muted small' }, `已归档 ${archived} 件（不计入上面的数字）· 已用完 ${items.filter(isDepleted).length} 件 · 没有照片的 ${noPhoto} 件 · 价值只统计填了价格的物品`));
 }
@@ -2958,9 +3215,7 @@ function cityCard() {
     await saving('正在保存…', async () => {
       await geocode(name); // 先确认查得到这个城市
       await store.save(`常住城市：${name}`, (data) => { data.prefs = { ...(data.prefs || {}), homeCity: name }; });
-    }).catch(() => {});
-    weatherCache.date = '';
-    toast('已保存');
+    }).then(() => { weatherCache.date = ''; toast('已保存'); }).catch(() => {});
   };
   return h('div', { class: 'card' },
     h('h3', {}, '常住城市'),
