@@ -293,12 +293,16 @@ def _(c):
 @step("出差：天气 + DeepSeek 推荐和穿搭、装进行李箱、回来放回原处")
 def _(c):
     p = c.page
-    # 密钥存进数据仓库的 config/ai.json，所有设备共用
-    c.go("#/settings")
-    p.get_by_role("textbox", name="API 密钥").fill("sk-test")
-    p.get_by_role("button", name="测试并保存到数据仓库").click()
-    expect(p.get_by_text("✓ 已保存在数据仓库")).to_be_visible()
+    # 旧版存在本机的密钥：打开网页时自动搬进数据仓库的 config/ai.json
+    p.evaluate("() => localStorage.setItem('inventory-deepseek', JSON.stringify({ key: 'sk-test', model: 'deepseek-chat' }))")
+    c.go("#/")
+    p.reload()
+    expect(p.locator(".toast", has_text="DeepSeek 密钥存到数据仓库")).to_be_visible()
     assert json.loads(c.repo.read("config/ai.json"))["deepseek"]["key"] == "sk-test"
+    assert p.evaluate("() => localStorage.getItem('inventory-deepseek')") is None
+    c.go("#/settings")
+    expect(p.get_by_text("已连接 DeepSeek")).to_be_visible()
+    expect(p.get_by_role("textbox", name="API 密钥")).to_be_hidden()   # 已连接时收起
     assert "sk-test" not in c.repo.read("inventory.json").decode()
     c.go("#/trips")
     p.get_by_role("button", name="新行程").click()
@@ -332,6 +336,7 @@ def _(c):
 def _(c):
     p = c.page
     c.go("#/settings")
+    p.get_by_text("更换或删除密钥").click()
     p.get_by_role("textbox", name="API 密钥").fill("")
     p.get_by_role("button", name="测试并保存到数据仓库").click()
     expect(p.get_by_text("还没有填")).to_be_visible()

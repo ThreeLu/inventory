@@ -49,9 +49,28 @@ async function refresh() {
   } catch (e) {
     loadError = e;
   }
+  if (!loadError) migrateLocalAiKey();
   // 第一次拿到数据（或出错）一定要画；之后数据有变化时，正在填表或扫码的页面不重画
   if (!hadData || loadError) render();
   else if (store.head !== before && !EDITING_ROUTES.test(currentPath())) render();
+}
+
+// 旧版把 DeepSeek 密钥存在设备的浏览器里；仓库里还没有时，自动存进数据仓库，所有设备共用
+let aiMigrating = false;
+async function migrateLocalAiKey() {
+  let local;
+  try { local = JSON.parse(localStorage.getItem('inventory-deepseek')); } catch { local = null; }
+  if (!local?.key || aiMigrating) return;
+  if (store.config?.deepseek?.key) { localStorage.removeItem('inventory-deepseek'); return; }
+  aiMigrating = true;
+  try {
+    await store.saveConfig({ ...(store.config || {}), deepseek: { key: local.key, model: local.model || 'deepseek-chat' } }, '保存 DeepSeek 设置（从设备迁移）');
+    localStorage.removeItem('inventory-deepseek');
+    toast('已把这台设备上的 DeepSeek 密钥存到数据仓库，所有设备都能用');
+    if (!EDITING_ROUTES.test(currentPath())) render();
+  } catch { /* 下次打开再试 */ } finally {
+    aiMigrating = false;
+  }
 }
 
 function boot() {
@@ -1764,14 +1783,28 @@ function settingsView() {
       h('p', { class: 'small' }, '数据仓库：', h('a', { href: `https://github.com/${settings.repo || DEFAULT_REPO}`, target: '_blank', rel: 'noopener' }, settings.repo || DEFAULT_REPO),
         '（每次修改都是一次提交，可以在 GitHub 上查看历史）'),
       h('button', { class: 'danger', onclick: logout }, '退出这台设备')) : null,
-    h('div', { class: 'card' },
-      h('h3', {}, 'DeepSeek（出差推荐用，选填）'),
-      h('p', { class: 'small' }, '填了之后，出差推荐会让 DeepSeek 挑东西、搭配衣服。密钥保存在你的私有数据仓库（config/ai.json），所有设备共用，只需填一次。发给 DeepSeek 的只有物品名称、类别和字段（季节、颜色等），不发照片、价格、序列号、备注。'),
-      h('p', { class: 'muted small' }, inRepo ? '✓ 已保存在数据仓库' : ai.key ? '密钥目前只在这台设备上，点下面的按钮存到数据仓库' : '还没有填'),
-      h('label', {}, 'API 密钥', aiKey),
-      h('label', {}, '模型', aiModel),
-      h('button', { class: 'secondary', onclick: () => saveAi() }, '测试并保存到数据仓库'),
-      h('p', { class: 'muted small' }, '清空密钥再保存就会删除。万一密钥泄露，到 DeepSeek 后台作废它、换新的。')));
+    aiCard(inRepo, ai, aiKey, aiModel, saveAi));
+}
+
+// AI 设置：连上了就只显示一行，要更换、删除再展开
+function aiCard(inRepo, ai, aiKey, aiModel, saveAi) {
+  const form = [
+    h('label', {}, 'API 密钥', aiKey),
+    h('label', {}, '模型', aiModel),
+    h('button', { class: 'secondary', onclick: () => saveAi() }, '测试并保存到数据仓库'),
+    h('p', { class: 'muted small' }, '清空密钥再保存就会删除。万一密钥泄露，到 DeepSeek 后台作废它、换新的。'),
+  ];
+  if (inRepo) {
+    return h('div', { class: 'card' },
+      h('h3', {}, 'AI'),
+      h('p', { class: 'small' }, `✓ 已连接 DeepSeek（${ai.model || 'deepseek-chat'}），出差推荐等 AI 功能会自动使用。`),
+      h('details', { class: 'plain' }, h('summary', {}, '更换或删除密钥'), form));
+  }
+  return h('div', { class: 'card' },
+    h('h3', {}, 'AI（选填）'),
+    h('p', { class: 'small' }, '填了 DeepSeek 密钥，出差推荐会让 AI 挑东西、搭配衣服。密钥保存在你的私有数据仓库（config/ai.json），所有设备共用，只需填一次。发给 DeepSeek 的只有物品名称、类别和字段（季节、颜色等），不发照片、价格、序列号、备注。'),
+    h('p', { class: 'muted small' }, ai.key ? '密钥目前只在这台设备上，点下面的按钮存到数据仓库' : '还没有填'),
+    form);
 }
 
 boot();

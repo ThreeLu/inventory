@@ -370,3 +370,8 @@ nav .dot { position: absolute; top: 1px; right: -6px; width: 8px; height: 8px; b
 .card ul li { margin-bottom: 4px; }
 
 [hidden] { display: none !important; }
+
+details.plain { border: 0; padding: 0; background: none; margin: 0; }
+details.plain summary { min-height: 36px; font-weight: 500; color: var(--accent); font-size: 14px; }
+
+[hidden] { display: none !important; }
