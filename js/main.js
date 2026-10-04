@@ -355,7 +355,7 @@ function listView() {
     }),
     h('div', { class: 'filters' },
       h('select', { value: listState.tag, onchange: (e) => { listState.tag = e.target.value; update(); } },
-        h('option', { value: '' }, '全部标签'), store.data.tags.map((t) => h('option', { value: t }, t))),
+        h('option', { value: '' }, '全部类别'), store.data.tags.map((t) => h('option', { value: t }, t))),
       locationSelect(listState.loc, { onchange: (e) => { listState.loc = e.target.value; update(); } }, '全部位置'),
       h('select', { value: listState.label, onchange: (e) => { listState.label = e.target.value; update(); } },
         h('option', { value: '' }, '标签状态'),
@@ -580,15 +580,15 @@ function formView(id, q = {}) {
   const added = { photos: [], receipts: [] }; // 新选的照片：{ file, url }
   const removed = [];
   let fieldRows = Object.entries(draft.fields || {}).map(([k, v]) => ({ k, v }));
-  // 编号是不是系统推荐的：推荐的可以随第一个标签变化、保存时撞号自动顺延；手动填的、扫码带来的、已有的不动
+  // 编号是不是系统推荐的：推荐的可以随类别变化、保存时撞号自动顺延；手动填的、扫码带来的、已有的不动
   let autoAsset = false;
   let renumberConfirmed = false;
   // 「贴标签」开关。编号和贴不贴标签无关：每件都有编号，开关只决定要不要进打印清单。
-  // 新建时跟着第一个标签的默认值走（衣服、鞋默认不贴），用户动过开关就不再自动改。
+  // 新建时跟着类别的默认值走（衣服、鞋默认不贴），用户动过开关就不再自动改。
   let wantLabel = existing ? existing.label !== 'none'
     : source ? source.label !== 'none' : defaultLabel(store.data, draft.tags) !== 'none';
   let labelTouched = Boolean(existing || source);
-  // 「消耗品」开关：同样按第一个标签给默认值（零食、药品、洗漱、清洁），可以单件改
+  // 「消耗品」开关：同样按类别给默认值（零食、药品、洗漱、清洁），可以单件改
   let wantConsumable = existing || source ? Boolean(draft.consumable) : defaultConsumable(store.data, draft.tags);
   let consumableTouched = Boolean(existing || source);
 
@@ -616,10 +616,10 @@ function formView(id, q = {}) {
       if (!norm) {
         assetMsg.textContent = draft.tags.length ? '保存时会按类别自动编号。' : '选好标签后会按类别自动编号（不选标签就用 000 开头）。';
       } else if (autoAsset) {
-        assetMsg.textContent = `按类别自动编号（${draft.tags[0] || '无标签'} ${prefix}-xxx）`;
+        assetMsg.textContent = `按类别自动编号（${draft.tags[0] || '无类别'} ${prefix}-xxxx）`;
       } else if (existing && draft.tags.length && !norm.startsWith(`${prefix}-`)) {
         // 编号是建档时的类别，之后改了标签不会自动换号（贴好的标签不能随便换）
-        assetMsg.textContent = `编号是建档时的类别，和现在第一个标签「${draft.tags[0]}」（${prefix}）不一致。`;
+        assetMsg.textContent = `编号是建档时的类别，和现在的类别「${draft.tags[0]}」（${prefix}）不一致。`;
         renumberBtn.hidden = false;
       } else {
         assetMsg.textContent = `编号：${norm}`;
@@ -701,17 +701,18 @@ function formView(id, q = {}) {
     return h('section', {}, h('h3', {}, title), grid);
   };
 
-  // ---- 标签和自定义字段 ----
+  // ---- 类别（一件东西只有一个）和自定义字段 ----
   const tagBox = h('div', { class: 'chips' });
   const fieldBox = h('div', {});
   const drawTags = () => {
     tagBox.replaceChildren(...store.data.tags.map((t) => h('button', {
       type: 'button', class: `chip${draft.tags.includes(t) ? ' on' : ''}`,
       onclick: () => {
-        draft.tags = draft.tags.includes(t) ? draft.tags.filter((x) => x !== t) : [...draft.tags, t];
+        // 只能选一个类别：再点一下已选的就取消
+        draft.tags = draft.tags[0] === t ? [] : [t];
         drawTags();
         drawFields();
-        // 第一个标签决定编号的类别；推荐的编号跟着变，手动填的、已有的不动
+        // 类别决定编号前 3 位；推荐的编号跟着变，手动填的、已有的不动
         if (autoAsset || (!existing && !assetInput.value)) applySuggestion();
         else checkAsset(assetInput.value);
         if (!labelTouched) {
@@ -822,7 +823,7 @@ function formView(id, q = {}) {
     photoSection('photos', '照片'),
     h('label', {}, '名称', bind('name', { placeholder: '例如 黑色羽绒服（优衣库）', required: true })),
     h('label', {}, '位置', locationSelect(draft.location, { onchange: (e) => { draft.location = e.target.value; } })),
-    h('div', { class: 'label' }, '标签', h('span', { class: 'hint inline' }, '第一个选的标签决定编号类别'), tagBox),
+    h('div', { class: 'label' }, '类别', h('span', { class: 'hint inline' }, '只选一个，决定编号前 3 位'), tagBox),
     h('div', { class: 'label' }, '编号', h('div', { class: 'asset-row' }, assetInput, suggestBtn), renumberBtn, assetMsg),
     h('div', { class: 'label' }, h('label', { class: 'switch-row' }, labelSwitch, '贴标签'), labelStatus),
     h('div', { class: 'label' }, h('label', { class: 'switch-row' }, consumableSwitch, '消耗品'),
@@ -1054,7 +1055,7 @@ function moreView() {
       entry('#/restock', '需要补货', '用完了的消耗品，相当于购物清单', store.data.items.filter((i) => isDepleted(i) && !i.archived).length || null),
       entry('#/reminders', '到期提醒', `保质期、保修 ${store.data.reminderDays} 天内到期的东西`, due || null),
       entry('#/stats', '统计', '每类、每个柜子有多少东西，值多少钱'),
-      entry('#/manage', '管理位置和标签', '新建、改名、类别编号、哪些类别不贴标签'),
+      entry('#/manage', '管理位置和类别', '新建、改名、类别编号、哪些类别默认不贴标签、算不算消耗品'),
       entry('#/trips', '出差 / 旅行', '按天数、天气、目的推荐带什么，装进行李箱', store.data.trips.filter((t) => t.status === 'packed').length || null),
       entry('#/boxes', '装箱', '搬家打包：扫码装箱，扫箱子看里面有什么', store.data.locations.filter((l) => l.box).length || null),
       entry('#/loans', '借出', '借给别人还没还的东西', store.data.items.filter((i) => i.loan && !i.archived).length || null),
@@ -1272,14 +1273,14 @@ function statsView() {
       h('div', { class: 'stat' }, h('div', { class: 'stat-num' }, money(value(items))), h('div', { class: 'stat-label' }, '记录的总价值')),
       h('div', { class: 'stat' }, h('div', { class: 'stat-num' }, `${items.filter((i) => i.label === 'printed').length} / ${items.filter((i) => i.label !== 'none').length}`),
         h('div', { class: 'stat-label' }, `标签已贴 / 要贴（待打印 ${items.filter((i) => i.label === 'pending').length}）`))),
-    h('div', { class: 'card' }, h('h3', {}, '按类别（第一个标签）'), byTag.length ? bars(byTag) : h('p', { class: 'muted' }, '还没有物品'),
-      untagged ? h('p', { class: 'muted small' }, `另有 ${untagged} 件没有标签`) : null),
+    h('div', { class: 'card' }, h('h3', {}, '按类别'), byTag.length ? bars(byTag) : h('p', { class: 'muted' }, '还没有物品'),
+      untagged ? h('p', { class: 'muted small' }, `另有 ${untagged} 件没有类别`) : null),
     h('div', { class: 'card' }, h('h3', {}, '按位置'), byPlace.length ? bars(byPlace) : h('p', { class: 'muted' }, '还没有物品')),
     byReason.length ? h('div', { class: 'card' }, h('h3', {}, `已归档（${archived}）`), bars(byReason)) : null,
     h('p', { class: 'muted small' }, `已归档 ${archived} 件（不计入上面的数字）· 已用完 ${items.filter(isDepleted).length} 件 · 没有照片的 ${noPhoto} 件 · 价值只统计填了价格的物品`));
 }
 
-// ---------- 管理位置和标签 ----------
+// ---------- 管理位置和类别 ----------
 
 function manageView() {
   const save = (message, fn) => saving('正在保存…', () => store.save(message, fn)).then(render).catch(() => {});
@@ -1301,10 +1302,10 @@ function manageView() {
     save(`删除位置：${loc.name}`, (data) => { data.locations = data.locations.filter((l) => l.id !== loc.id); });
   };
   const addTag = () => {
-    const name = prompt('新标签：');
+    const name = prompt('新类别：');
     if (!name?.trim()) return;
-    if (store.data.tags.includes(name.trim())) return toast('已经有这个标签了', 'error');
-    save(`新建标签：${name.trim()}`, (data) => {
+    if (store.data.tags.includes(name.trim())) return toast('已经有这个类别了', 'error');
+    save(`新建类别：${name.trim()}`, (data) => {
       data.tags.push(name.trim());
       data.tagCodes[name.trim()] = nextTagCode(data);
     });
@@ -1313,8 +1314,8 @@ function manageView() {
     const name = prompt('新名称：', tag);
     if (!name?.trim() || name.trim() === tag) return;
     const to = name.trim();
-    if (store.data.tags.includes(to)) return toast('已经有这个标签了', 'error');
-    save(`标签改名：${tag} → ${to}`, (data) => {
+    if (store.data.tags.includes(to)) return toast('已经有这个类别了', 'error');
+    save(`类别改名：${tag} → ${to}`, (data) => {
       data.tags = data.tags.map((t) => (t === tag ? to : t));
       for (const it of data.items) it.tags = it.tags.map((t) => (t === tag ? to : t));
       for (const key of ['fieldPresets', 'tagCodes']) {
@@ -1326,8 +1327,8 @@ function manageView() {
   };
   const deleteTag = (tag) => {
     const used = store.data.items.filter((i) => i.tags.includes(tag)).length;
-    if (!confirm(`删除标签「${tag}」？${used ? `\n有 ${used} 件物品用了它，会从这些物品上去掉（已有的编号不变）。` : ''}`)) return;
-    save(`删除标签：${tag}`, (data) => {
+    if (!confirm(`删除类别「${tag}」？${used ? `\n有 ${used} 件物品用了它，会从这些物品上去掉（已有的编号不变）。` : ''}`)) return;
+    save(`删除类别：${tag}`, (data) => {
       data.tags = data.tags.filter((t) => t !== tag);
       for (const it of data.items) it.tags = it.tags.filter((t) => t !== tag);
       delete data.fieldPresets?.[tag];
@@ -1369,8 +1370,8 @@ function manageView() {
         h('button', { class: 'link danger-text', onclick: () => deleteLocation(loc) }, '删除'))),
       h('button', { class: 'secondary', onclick: () => addLocation(null) }, '新建顶层位置')),
     h('section', { class: 'card' },
-      h('h3', {}, '标签'),
-      h('p', { class: 'muted small' }, '编号的前 3 位由物品的第一个标签决定，柜子统一是 010。「不贴 / 贴标签」「消耗品 / 耐用」是新建时的默认值，每件东西都能单独改。'),
+      h('h3', {}, '类别'),
+      h('p', { class: 'muted small' }, '编号的前 3 位由物品的类别决定，柜子统一是 010。「不贴 / 贴标签」「消耗品 / 耐用」是新建时的默认值，每件东西都能单独改。'),
       store.data.tags.map((tag) => {
         const off = store.data.unlabeledTags.includes(tag);
         return h('div', { class: 'manage-row' },
@@ -1382,13 +1383,15 @@ function manageView() {
           h('button', { class: 'link', onclick: () => renameTag(tag) }, '改名'),
           h('button', { class: 'link danger-text', onclick: () => deleteTag(tag) }, '删除'));
       }),
-      h('button', { class: 'secondary', onclick: addTag }, '新建标签')));
+      h('button', { class: 'secondary', onclick: addTag }, '新建类别')));
 }
 
 // ---------- 首页提示卡片 ----------
 
-const AI_KEY = 'inventory-deepseek';
-const readAi = () => { try { return JSON.parse(localStorage.getItem(AI_KEY)) || {}; } catch { return {}; } };
+const AI_KEY = 'inventory-deepseek'; // 旧版存在本机的密钥，仓库里没有时才用
+const readLocalAi = () => { try { return JSON.parse(localStorage.getItem(AI_KEY)) || {}; } catch { return {}; } };
+// DeepSeek 设置：优先用私有数据仓库里的 config/ai.json（所有设备共用）
+const readAi = () => (store?.config?.deepseek?.key ? store.config.deepseek : readLocalAi());
 
 function tokenCard() {
   if (!settings.tokenExpires) return null;
@@ -1425,7 +1428,7 @@ function exportExcel() {
     Object.entries(i.fields || {}).map(([k, v]) => `${k}：${v}`).join('；'), i.description || '', i.notes || '',
     i.loan ? `${i.loan.to}（${i.loan.date}）` : '', i.archived ? `${i.archiveReason || '已归档'} ${i.archivedAt || ''}` : '',
   ]);
-  const head = ['编号', '名称', '标签', '位置', '数量', '消耗品', '标签状态', '品牌', '型号', '序列号', '购买日期', '价格', '购买地点',
+  const head = ['编号', '名称', '类别', '位置', '数量', '消耗品', '标签状态', '品牌', '型号', '序列号', '购买日期', '价格', '购买地点',
     '保修到期', '其他信息', '描述', '备注', '借出', '归档'];
   const blob = makeXlsx([head, ...rows.map((r) => r.map((v) => String(v)))], '物品');
   const a = h('a', { href: URL.createObjectURL(blob), download: `物品档案_${today()}.xlsx` });
@@ -1695,10 +1698,12 @@ function settingsView() {
   const repo = h('input', { value: settings.repo || DEFAULT_REPO });
   const token = h('input', { type: 'password', value: settings.token || '', placeholder: 'github_pat_…', autocomplete: 'off' });
   const expires = h('input', { type: 'date', value: settings.tokenExpires || '' });
-  const ai = readAi();
+  const ai = store?.data ? readAi() : readLocalAi();
+  const inRepo = Boolean(store?.config?.deepseek?.key);
   const aiKey = h('input', { type: 'password', value: ai.key || '', placeholder: 'sk-…', autocomplete: 'off' });
   const aiModel = h('input', { value: ai.model || 'deepseek-chat' });
   const saveAi = async () => {
+    if (!store?.data) return toast('先连接数据仓库', 'error');
     const next = { key: aiKey.value.trim(), model: aiModel.value.trim() || 'deepseek-chat' };
     if (next.key) {
       // 列模型的接口不花钱，用来验证密钥
@@ -1706,8 +1711,12 @@ function settingsView() {
       if (!res) return toast('连不上 DeepSeek', 'error');
       if (!res.ok) return toast(res.status === 401 ? 'DeepSeek 密钥不对' : `DeepSeek 返回 ${res.status}`, 'error');
     }
-    localStorage.setItem(AI_KEY, JSON.stringify(next));
-    toast(next.key ? 'DeepSeek 已连接' : '已清除 DeepSeek 密钥');
+    const config = { ...(store.config || {}) };
+    if (next.key) config.deepseek = next; else delete config.deepseek;
+    await saving('正在保存到数据仓库…', () => store.saveConfig(config, next.key ? '保存 DeepSeek 设置' : '删除 DeepSeek 密钥')).catch(() => {});
+    localStorage.removeItem(AI_KEY); // 以仓库里的为准
+    toast(next.key ? 'DeepSeek 已连接，所有设备都能用' : '已删除 DeepSeek 密钥');
+    render();
   };
 
   const saveSettings = async () => {
@@ -1757,10 +1766,12 @@ function settingsView() {
       h('button', { class: 'danger', onclick: logout }, '退出这台设备')) : null,
     h('div', { class: 'card' },
       h('h3', {}, 'DeepSeek（出差推荐用，选填）'),
-      h('p', { class: 'small' }, '填了之后，出差推荐会让 DeepSeek 挑东西、搭配衣服。密钥只存在这台设备的浏览器里。发给 DeepSeek 的只有物品名称、类别和字段（季节、颜色等），不发照片、价格、序列号、备注。'),
+      h('p', { class: 'small' }, '填了之后，出差推荐会让 DeepSeek 挑东西、搭配衣服。密钥保存在你的私有数据仓库（config/ai.json），所有设备共用，只需填一次。发给 DeepSeek 的只有物品名称、类别和字段（季节、颜色等），不发照片、价格、序列号、备注。'),
+      h('p', { class: 'muted small' }, inRepo ? '✓ 已保存在数据仓库' : ai.key ? '密钥目前只在这台设备上，点下面的按钮存到数据仓库' : '还没有填'),
       h('label', {}, 'API 密钥', aiKey),
       h('label', {}, '模型', aiModel),
-      h('button', { class: 'secondary', onclick: () => saveAi() }, '保存并测试')));
+      h('button', { class: 'secondary', onclick: () => saveAi() }, '测试并保存到数据仓库'),
+      h('p', { class: 'muted small' }, '清空密钥再保存就会删除。万一密钥泄露，到 DeepSeek 后台作废它、换新的。')));
 }
 
 boot();

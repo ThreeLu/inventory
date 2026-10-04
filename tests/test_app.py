@@ -169,6 +169,11 @@ def _(c):
     p.get_by_role("button", name="衣服", exact=True).click()
     expect(p.locator(".asset-row input")).to_have_value("110-0004")
     expect(p.locator(".switch-row input").first).not_to_be_checked()
+    # 只能选一个类别：再点别的就换成别的
+    p.get_by_role("button", name="文具", exact=True).click()
+    expect(p.locator(".chips .chip.on")).to_have_count(1)
+    expect(p.locator(".chips .chip.on")).to_have_text("文具")
+    expect(p.locator(".asset-row input")).to_have_value("180-0001")
 
 
 @step("别的设备抢先用了推荐的编号：保存时自动顺延")
@@ -288,7 +293,13 @@ def _(c):
 @step("出差：天气 + DeepSeek 推荐和穿搭、装进行李箱、回来放回原处")
 def _(c):
     p = c.page
-    p.evaluate("() => localStorage.setItem('inventory-deepseek', JSON.stringify({ key: 'sk-test', model: 'deepseek-chat' }))")
+    # 密钥存进数据仓库的 config/ai.json，所有设备共用
+    c.go("#/settings")
+    p.get_by_role("textbox", name="API 密钥").fill("sk-test")
+    p.get_by_role("button", name="测试并保存到数据仓库").click()
+    expect(p.get_by_text("✓ 已保存在数据仓库")).to_be_visible()
+    assert json.loads(c.repo.read("config/ai.json"))["deepseek"]["key"] == "sk-test"
+    assert "sk-test" not in c.repo.read("inventory.json").decode()
     c.go("#/trips")
     p.get_by_role("button", name="新行程").click()
     p.get_by_label("目的地").fill("上海")
@@ -320,7 +331,11 @@ def _(c):
 @step("出差：没有 DeepSeek 时用规则推荐")
 def _(c):
     p = c.page
-    p.evaluate("() => localStorage.removeItem('inventory-deepseek')")
+    c.go("#/settings")
+    p.get_by_role("textbox", name="API 密钥").fill("")
+    p.get_by_role("button", name="测试并保存到数据仓库").click()
+    expect(p.get_by_text("还没有填")).to_be_visible()
+    assert "deepseek" not in json.loads(c.repo.read("config/ai.json"))
     c.go("#/trips")
     p.get_by_role("button", name="新行程").click()
     p.get_by_label("目的地").fill("哈尔滨")
@@ -345,7 +360,7 @@ def _(c):
     path = ART / "all.xlsx"
     dl.value.save_as(path)
     rows = list(openpyxl.load_workbook(path).active.iter_rows(values_only=True))
-    assert rows[0][:3] == ("编号", "名称", "标签") and len(rows) == len(c.data()["items"]) + 1
+    assert rows[0][:3] == ("编号", "名称", "类别") and len(rows) == len(c.data()["items"]) + 1
 
 
 @step("批量录入脚本：自动编号接着网页的往后排")

@@ -4,6 +4,8 @@
 import { GitHubError } from './github.js';
 
 const DATA_FILE = 'inventory.json';
+// AI 等服务的密钥放在私有数据仓库里，所有设备共用；不放进 inventory.json，导出、发给 AI 时都不会带上
+const CONFIG_FILE = 'config/ai.json';
 const CACHE_KEY = 'inventory-cache';
 
 // 编号格式 XXX-YYYY：前 3 位类别（000～899），后 4 位顺序号（0001～9999）
@@ -11,7 +13,7 @@ export const PREFIX_MAX = 899;
 export const SEQ_MAX = 9999;
 const formatAsset = (prefix, n) => `${String(prefix).padStart(3, '0')}-${String(n).padStart(4, '0')}`;
 
-// 编号前 3 位表示类别：物品按第一个标签，柜子等位置统一用 010，没有标签的物品用 000
+// 编号前 3 位表示类别：物品按类别，柜子等位置统一用 010，没有类别的物品用 000
 export const LOCATION_PREFIX = '010';
 export const UNTAGGED_PREFIX = '000';
 const RESERVED_PREFIXES = [UNTAGGED_PREFIX, LOCATION_PREFIX];
@@ -29,7 +31,10 @@ export function migrate(data) {
   // 每类用到过的最大编号：删除东西也不会往回退，所以编号永不复用
   data.assetHighWater ||= {};
   bumpHighWater(data);
-  for (const item of data.items) if (item.consumable === undefined) item.consumable = defaultConsumable(data, item.tags);
+  for (const item of data.items) {
+    if (item.tags.length > 1) item.tags = item.tags.slice(0, 1); // 一件东西只有一个类别
+    if (item.consumable === undefined) item.consumable = defaultConsumable(data, item.tags);
+  }
   data.trips ||= [];
   // 旧版用 labelPrinted 布尔值，现在是 label: 'none' | 'pending' | 'printed'；旧版编号后段 3 位，现在 4 位
   for (const x of [...data.items, ...data.locations]) {
@@ -70,7 +75,7 @@ export function bumpHighWater(data) {
   }
 }
 
-// 新建时「消耗品」开关的默认值：第一个标签在 consumableTags 里
+// 新建时「消耗品」开关的默认值：类别在 consumableTags 里
 export function defaultConsumable(data, tags) {
   return Boolean(tags.length && data.consumableTags.includes(tags[0]));
 }
@@ -107,7 +112,7 @@ export function isDepleted(item) {
   return Boolean(item.consumable && Number(item.quantity) === 0);
 }
 
-// 新建时「贴标签」开关的默认值：第一个标签是衣服、鞋这类就默认不贴。编号不受影响，每件都有。
+// 新建时「贴标签」开关的默认值：类别是衣服、鞋这类就默认不贴。编号不受影响，每件都有。
 export function defaultLabel(data, tags) {
   return tags.length && data.unlabeledTags.includes(tags[0]) ? 'none' : 'pending';
 }
@@ -197,9 +202,35 @@ export class Store {
   async load() {
     const head = await this.gh.headSha();
     if (head !== this.head || !this.data) {
+      this.config = await this.readConfig(head);
       this.data = migrate(JSON.parse(await this.gh.readText(DATA_FILE, head)));
       this.head = head;
       this.writeCache();
+    }
+  }
+
+  async readConfig(ref) {
+    try {
+      return JSON.parse(await this.gh.readText(CONFIG_FILE, ref));
+    } catch (e) {
+      if (e instanceof GitHubError && e.status === 404) return {}; // 还没保存过
+      throw e;
+    }
+  }
+
+  // 写 config/ai.json（整个替换）。和 save() 一样，分支被别处更新了就重试
+  async saveConfig(config, message) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const head = await this.gh.headSha();
+      try {
+        this.head = await this.gh.commit(head, [{ path: CONFIG_FILE, content: JSON.stringify(config, null, 1) + '\n' }], message);
+        this.config = config;
+        this.data = null; // 下次 load() 重新读数据（head 变了）
+        await this.load();
+        return;
+      } catch (e) {
+        if (!(e instanceof GitHubError && e.status === 422) || attempt === 3) throw e;
+      }
     }
   }
 

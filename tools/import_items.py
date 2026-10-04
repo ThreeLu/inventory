@@ -231,6 +231,8 @@ def check(manifest, base_dir, data):
             item["_location"] = resolve_location(loc, paths)
         except ImportError_ as e:
             errors.append(f"{label}：{e}")
+        if len(item.get("tags", [])) > 1:
+            errors.append(f"{label}：只能有一个类别，现在是 {item['tags']}")
         unknown = [t for t in item.get("tags", []) if t not in data["tags"]]
         if unknown:
             errors.append(f"{label}：没有这些标签 {unknown}。可用：{'、'.join(data['tags'])}")

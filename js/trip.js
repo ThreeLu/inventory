@@ -76,7 +76,7 @@ export function candidates(data) {
 function describe(data, item) {
   const loc = data.locations.find((l) => l.id === item.location);
   const fields = Object.entries(item.fields || {}).filter(([k]) => !['剩余', '规格'].includes(k)).map(([k, v]) => `${k}=${v}`);
-  return [item.id, item.name, item.tags.join('/') || '无标签', fields.join(' ') || '-', loc ? loc.name.split(' ')[0] : '-', item.description || '']
+  return [item.id, item.name, item.tags[0] || '无类别', fields.join(' ') || '-', loc ? loc.name.split(' ')[0] : '-', item.description || '']
     .map((s) => String(s).replace(/\|/g, '/')).join(' | ');
 }
 
@@ -158,7 +158,7 @@ export async function aiPlan(data, trip, weather, base, { key, model }) {
     trip.note ? `补充：${trip.note}` : '',
     `天气：\n${weatherText}`,
     '',
-    '我的物品（每行：id | 名称 | 标签 | 字段 | 现在放在哪 | 描述）：',
+    '我的物品（每行：id | 名称 | 类别 | 字段 | 现在放在哪 | 描述）：',
     ...pool.map((i) => describe(data, i)),
     '',
     `规则初步挑选的 id：${base.items.map((i) => i.id).join(', ') || '无'}`,
