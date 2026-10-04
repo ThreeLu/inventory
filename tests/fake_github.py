@@ -97,6 +97,13 @@ def make_handler(repos):
             if m:
                 c = repo.commits.get(m.group(1))
                 return self.reply(200, {"sha": m.group(1), "tree": {"sha": c["tree"]}}) if c else self.reply(404)
+            if re.search(r"/repos/[^/]+/[^/]+/commits$", path):
+                out, sha = [], repo.head
+                while sha and len(out) < 100:
+                    c = repo.commits[sha]
+                    out.append({"sha": sha, "commit": {"message": c["message"], "author": {"name": "test"}, "committer": {"date": "2026-10-04T12:00:00Z"}}})
+                    sha = c["parent"]
+                return self.reply(200, out)
             m = re.search(r"/repos/[^/]+/[^/]+/contents/(.+)$", path)
             if m:
                 from urllib.parse import unquote, parse_qs

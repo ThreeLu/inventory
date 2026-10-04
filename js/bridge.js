@@ -30,11 +30,31 @@ export async function readLedger(gh) {
     return {
       accounts, categories, tx: d.tx || [],
       account: accounts.some((a) => a.id === last) ? last : accounts[0]?.id,
+      left: budgetLeft(d),
     };
   } catch (e) {
     if (e instanceof GitHubError) return null;
     throw e;
   }
+}
+
+// 这个预算月吃饭、日常两组还剩多少（和账本 money.js 的 periodOf / 预算一样：预算月从 periodStartDay 号开始）
+export function budgetLeft(d, now = new Date()) {
+  const startDay = d.settings?.periodStartDay || 1;
+  const y = now.getFullYear();
+  const m = now.getMonth() - (now.getDate() < startDay ? 1 : 0);
+  const fmt = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+  const start = fmt(new Date(y, m, startDay));
+  const end = fmt(new Date(y, m + 1, startDay - 1));
+  const group = new Map((d.categories || []).map((c) => [c.id, c.group]));
+  const spent = { food: 0, daily: 0 };
+  for (const t of d.tx || []) {
+    if (!['expense', 'writeoff'].includes(t.type) || t.date < start || t.date > end) continue;
+    const g = group.get(t.category);
+    if (g in spent) spent[g] += t.cny ?? t.amount;
+  }
+  const r = (n) => Math.round(n);
+  return { end, food: r((d.budget?.food || 0) - spent.food), daily: r((d.budget?.daily || 0) - spent.daily) };
 }
 
 // 物品档案的类别 → 账本的类别（猜一个默认的，界面上可以改）

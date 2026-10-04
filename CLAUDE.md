@@ -38,6 +38,15 @@
 - 撤销代替确认：`saveUndoable(message, mutate, doneText)` 先做，底部 `undoToast`「…  撤销」6 秒；撤销 = 把 `diff(改后, 改前)` 套回去（只动这次改到的，`assetHighWater` 不回退）。用在用完了、已归还、找不到了、重新打印、标记已打印、换季、拆箱放回、删模板。删除物品 / 位置 / 类别、改已打印的编号、退出等仍然 `confirm`。
 - 顺手记账（`js/bridge.js`）：同一个令牌直接写账本仓库 `finance-data/finance.json`（`ledgerGitHub`：账本设置的仓库，没有就同账号下的 finance-data），只往 `tx` 里加 `expense`（带 `from: 'inventory'`）。「买回来了」和新建物品填了价格后弹「顺手记一笔账？」：类别按 名字关键词 / 账本里同名的上次类别 / 物品类别 猜（`guessCategory`，关键词表和账本 `js/receipt.js` 的 `BY_WORD` 是同一张，改要两边改），同类合一笔，只列人民币账户，默认账本上次用的账户（`localStorage['ledger-last']`）。读不到账本就不问。
 - 账本的「导入小票」会写 inventory.json：补货（quantity、purchaseDate、notes、清 runningLow）、划掉 `shopping.extra`、`shopping.history` 记 `from: 'receipt'`、新东西进 `shopping.toFile`（带 `qty`、`paid: true`、`from: 'receipt'`）。`toFile` 建档链接带上价格、数量、日期，`paid` 的建档后不再问记账；首页「需要注意」显示还没建档的件数。
+- 推送（数据仓库 `.github/*_push.py`）：GitHub 定时任务不准、整点常整次跳过（2026-10-04 晚两条都没发），所以每个推送错开整点排三次 cron，脚本 `once(key)` 用 `config/push-sent.json` 保证一天只发一次、过了点（晚上 23 点 / 购物 13 点）不发；手动运行不受影响。没合成一条：iPhone 上两个网站是两个 App，一条通知只能打开其中一个。
+- 晚上洗衣推送顺带：今天 / 明天过退货期的、两天内离校的。周日购物推送带「大概 ¥N（预算 ¥M）」，规则里加了「按平时多久买一次快该买了」，和网页一致。
+- 退货期：`item.returnBy`；新建时类别在 `RETURN_TAGS`（电子产品、衣服、运动服、鞋、包、运动器材）且填了购买日期、没填退货截止 → 购买日期 + 7 天（已过不填）。`reminders()` 里 kind「退货」只在 0～3 天内出现；首页单独一条，物品页横幅「没问题，不退了」删掉 returnBy。
+- 消耗品节奏：`usageRate(data, item)` 用 `shopping.history` 里同一 itemId 的不同日期（≥2 次）算平均几天买一次；`next − 4 天` 到了就进购物清单（`平时 N 天买一次，差不多该买了`）。`monthlyConsumables()` 最近 90 天有价格的购物记录按类别 ÷ 3，统计页显示。
+- 衣服穿一次多少钱：`costPerWear(item)` = 价格 ÷ `item.worn.length`（衣服、运动服、鞋）。物品页一行，统计页「最值」（穿 ≥3 次，便宜在前）和「还没回本」。
+- 购物预算：`shopEstimate(data, entry)` = 上次买它的价格（history 按 itemId 或同名）或建档价格；`prefs.shopBudget` 每周预算；顶上卡片：大概多少、预算够不够、已勾的多少、账本这个月吃饭 / 日常还剩多少（`bridge.budgetLeft`，和账本 periodOf 一样算）。
+- 放假离校 / 开学返校（`#/term`）：`data.term = { leave, back, done }`。清单现算（`termChecklist`）：返校前会过期的吃的药、要还的书、洗衣篮和床品、贵重东西（证件、钥匙、¥300 以上电子产品）、固定任务 `TERM_TASKS`；返校：在「家」的东西、购物清单。离校前 7 天 / 返校前后首页提醒；贵重东西可一键存成「放假带回家」模板去出行扫码装包。改离校日期会清空打勾。
+- 找东西（`#/find?text=`，Siri 快捷指令用，说明在 `#/siri`）：去掉「在哪 / 放哪了」等词 → 名称包含 → 全部信息 → 按字重合 ≥2。结果显示中文位置路径。
+- 手机丢了（`#/lost`，两站都有）：怎么在 GitHub 删令牌、换令牌；最近 40 次修改（两个仓库合起来）按设备统计。网页的每次提交说明后面自动加「 · 设备」（`github.js` 的 `DEVICE`），`recentCommits()` 拆出来。
 - `js/main.js` 路由和页面；`js/scan.js` 网页内扫码（`vendor/jsQR.js`，按需加载）；`js/github.js` API；`js/util.js` DOM（只用 textContent，不要用 innerHTML 拼数据，令牌存在 localStorage，XSS 会泄露令牌）、图片压缩、照片缓存。
 - `tools/import_items.py`：Mac 上批量录入，流程见 `.claude/skills/batch-import`。
 - 没有构建步骤。

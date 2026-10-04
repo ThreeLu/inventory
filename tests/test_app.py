@@ -18,6 +18,7 @@ import traceback
 import zlib
 from datetime import date, timedelta
 from functools import partial
+from urllib.parse import quote
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -81,6 +82,7 @@ def ledger_seed():
             "categories": [cat("c-snack", "零食", "food"), cat("c-drink", "饮料奶茶", "food"), cat("c-tissue", "纸巾清洁", "daily"),
                            cat("c-medical", "买药", "daily"), cat("c-gadget", "电子耗材", "daily"), cat("c-dorm", "宿舍小物件", "daily"),
                            cat("c-wish", "心愿", "none"), {"id": "i-job", "name": "兼职", "kind": "income"}],
+            "budget": {"food": 1000, "daily": 500}, "settings": {"periodStartDay": 1},
             "tx": []}
     return {"finance.json": json.dumps(data, ensure_ascii=False).encode()}
 
@@ -883,6 +885,119 @@ def fake_externals(page):
             ans = chat(user)
         route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(ans, ensure_ascii=False)}}]})
     page.route("https://api.deepseek.com/**", deepseek)
+
+
+@step("找东西（Siri）：「充电器在哪」去掉在哪找名字，按字也能找；Siri 说明页")
+def _(c):
+    p = c.page
+    c.go("#/find?text=" + quote("手机充电器在哪"))
+    hit = p.locator(".find-hit", has_text="手机充电器")
+    expect(hit).to_contain_text("书桌抽屉")
+    c.go("#/find?text=" + quote("充电线放哪了"))  # 名字里没有「充电线」，按字找到「手机充电器」
+    expect(p.locator(".find-hit", has_text="手机充电器")).to_be_visible()
+    c.go("#/find?text=" + quote("游泳镜在哪里"))
+    expect(p.get_by_text("档案里没找到")).to_be_visible()
+    c.go("#/siri")
+    expect(p.locator("code", has_text="#/find?text=")).to_be_visible()
+
+
+@step("退货期：新买的电子产品自动填退货截止，快到了首页提醒，「没问题，不退了」")
+def _(c):
+    p = c.page
+    c.go("#/new")
+    p.get_by_label("名称").fill("蓝牙耳机")
+    p.get_by_label("位置").select_option(label="　　书桌抽屉 Desk Drawer")
+    p.get_by_role("button", name="电子产品", exact=True).click()
+    p.get_by_text("品牌、购买与保修").click()
+    p.get_by_label("购买日期", exact=True).fill(D(-5))
+    p.get_by_role("button", name="保存", exact=True).click()
+    c.wait_item("蓝牙耳机")
+    if p.locator(".sheet", has_text="顺手记一笔账").count():
+        p.locator(".sheet").get_by_role("button", name="不用了").click()
+    assert c.item("蓝牙耳机")["returnBy"] == D(2)
+    expect(p.get_by_text(f"{D(2)} 前还能退")).to_be_visible()
+    c.go("#/")
+    expect(p.locator(".cell", has_text="蓝牙耳机 2 天后过退货期")).to_be_visible()
+    p.locator(".cell", has_text="蓝牙耳机 2 天后过退货期").click()
+    p.get_by_role("button", name="没问题，不退了").click()
+    expect(p.get_by_text("前还能退")).to_have_count(0)
+    assert "returnBy" not in c.item("蓝牙耳机")
+
+
+@step("消耗品多久买一次、衣服穿一次多少钱、购物清单估价和预算、账本里还剩多少")
+def _(c):
+    p = c.page
+    d = c.data()
+    med = next(i for i in d["items"] if i["name"] == "布洛芬片")
+    d.setdefault("shopping", {}).setdefault("history", [])
+    d["shopping"]["history"] = [x for x in d["shopping"]["history"] if x.get("itemId") != med["id"]] + [{"date": D(-30), "name": "布洛芬片", "itemId": med["id"], "price": 12},
+                                 {"date": D(-15), "name": "布洛芬片", "itemId": med["id"], "price": 13}]
+    med.pop("runningLow", None); med.pop("lowAt", None)
+    d["shopping"]["extra"], d["shopping"]["skip"] = [], {}
+    coat = next(i for i in d["items"] if i["name"] == "黑色羽绒服")
+    coat.update(purchasePrice=600, worn=[D(-3), D(-2), D(-1)])
+    tee = next(i for i in d["items"] if i["name"] == "灰色卫衣")
+    tee.update(purchasePrice=200, worn=[])
+    c.repo.external_write("inventory.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go(f"#/item/{med['id']}")
+    p.reload()
+    expect(p.get_by_text("平均 15 天")).to_be_visible()
+    c.go(f"#/item/{coat['id']}")
+    expect(p.get_by_text("¥200（穿了 3 次）")).to_be_visible()
+    c.go("#/shopping")
+    expect(p.locator(".shop-row", has_text="布洛芬片")).to_contain_text("平时 15 天买一次")
+    expect(p.locator(".shop-budget")).to_contain_text("大概 ¥13")
+    expect(p.locator(".shop-budget")).to_contain_text("账本：这个月日常还剩")
+    c.prompt = "10"
+    p.get_by_role("button", name="设预算").click()
+    expect(p.locator(".shop-budget")).to_contain_text("比预算多 ¥3")
+    assert c.data()["prefs"]["shopBudget"] == 10
+    c.go("#/stats")
+    expect(p.get_by_text("消耗品每月大约")).to_be_visible()
+    cpw = p.locator(".card", has_text="衣服穿一次多少钱")
+    expect(cpw.locator(".cpw-row", has_text="黑色羽绒服")).to_contain_text("¥200/次")
+    expect(cpw.locator(".cpw-row", has_text="灰色卫衣")).to_contain_text("还没穿")
+
+
+@step("放假离校清单：会过期的、贵重东西、每次要做的；首页提醒；打勾；建成回家出行")
+def _(c):
+    p = c.page
+    d = c.data()
+    d["items"].append({**c.item("布洛芬片"), "id": "isnack", "name": "牛肉干", "assetId": None, "tags": ["零食食品"], "quantity": 2,
+                       "fields": {"保质期": D(20)}, "notes": ""})
+    c.repo.external_write("inventory.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/term")
+    p.reload()
+    p.get_by_label("返校日期").fill(D(40))
+    p.get_by_label("返校日期").dispatch_event("change")
+    expect(p.get_by_label("返校日期")).to_have_value(D(40))
+    p.get_by_label("离校日期").fill(D(3))
+    p.get_by_label("离校日期").dispatch_event("change")
+    expect(p.locator(".shop-row", has_text="牛肉干")).to_contain_text(f"保质期 {D(20)}")
+    expect(p.locator(".shop-row", has_text="身份证")).to_be_visible()
+    p.locator(".shop-row", has_text="拔掉插头").click()
+    expect(p.locator(".shop-row.done", has_text="拔掉插头")).to_be_visible()
+    t = c.data()["term"]
+    assert t["leave"] == D(3) and t["back"] == D(40) and any(k.startswith("task:leave") for k in t["done"]), t
+    c.go("#/")
+    expect(p.locator(".cell", has_text="3 天后离校：清单还有")).to_be_visible()
+    c.go("#/term")
+    p.get_by_role("button", name="建成回家出行，扫码装包").click()
+    p.wait_for_function("location.hash === '#/trip/new'")
+    assert any(l["name"] == "放假带回家" and c.item("身份证")["id"] in l["items"] for l in c.data()["lists"])
+    c.go("#/term?kind=back")
+    expect(p.locator(".shop-row", has_text="开窗通风")).to_be_visible()
+
+
+@step("手机丢了怎么办：怎么删令牌，最近的修改记录带设备名")
+def _(c):
+    p = c.page
+    c.go("#/settings")
+    p.get_by_role("link", name="手机丢了怎么办").click()
+    expect(p.get_by_text("最下面 Delete")).to_be_visible()
+    expect(p.get_by_text("这台是")).to_be_visible()
+    expect(p.locator(".commit-row").first).to_be_visible()
+    assert " · " in c.repo.commits[c.repo.head]["message"]  # 网页提交的说明带上了设备名
 
 
 def main():

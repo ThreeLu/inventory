@@ -4,6 +4,18 @@
 // 自动测试会把它指向本地的假 GitHub（tests/fake_github.py）；正常使用时就是 api.github.com
 const API = localStorage.getItem('inventory-api-base') || 'https://api.github.com';
 
+// 每次提交的说明后面带上是哪台设备改的（「手机丢了怎么办」页面里看最近的修改记录，认得出陌生设备）
+function deviceLabel() {
+  const ua = navigator.userAgent;
+  if (/iPhone/.test(ua)) return 'iPhone';
+  if (/iPad/.test(ua)) return 'iPad';
+  if (/Android/.test(ua)) return '安卓手机';
+  if (/Mac/.test(ua)) return 'Mac';
+  if (/Windows/.test(ua)) return 'Windows 电脑';
+  return '电脑';
+}
+export const DEVICE = deviceLabel();
+
 export class GitHubError extends Error {
   constructor(message, status) {
     super(message);
@@ -86,13 +98,24 @@ export class GitHub {
       },
     });
     const commit = await this.request('POST', this.repoPath('/git/commits'), {
-      body: { message, tree: tree.sha, parents: [parentSha] },
+      body: { message: `${message} · ${DEVICE}`, tree: tree.sha, parents: [parentSha] },
     });
     await this.request('PATCH', this.repoPath(`/git/refs/heads/${this.branch}`), {
       body: { sha: commit.sha, force: false },
     });
     return commit.sha;
   }
+}
+
+// 最近的提交：[{ message, date, device }]。device 是说明最后「 · 」后面的设备名；定时任务、批量录入脚本没有
+export async function recentCommits(gh, n = 40) {
+  const list = await gh.request('GET', gh.repoPath(`/commits?sha=${gh.branch}&per_page=${n}`));
+  return list.map((c) => {
+    const msg = c.commit.message.split('\n')[0];
+    const m = msg.match(/^(.*) · ([^·]+)$/);
+    const bot = /github-actions/.test(c.commit.author?.name || '');
+    return { message: m ? m[1] : msg, date: c.commit.committer?.date || c.commit.author?.date, device: m ? m[2] : bot ? 'GitHub 定时任务' : '没写设备' };
+  });
 }
 
 function encodePath(path) {

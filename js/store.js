@@ -218,6 +218,55 @@ export function shopWeek(d = new Date()) {
   x.setDate(x.getDate() - x.getDay());
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
 }
+// 一样消耗品平均多久买一次：购物记录（买回来了、小票导入）里这件东西的日期，至少买过两次才算
+export const USAGE_SOON = 4; // 按平时的节奏，还有几天就该买了时放进购物清单
+const plusDays = (day, n) => {
+  const d = new Date(`${day}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+export function usageRate(data, item) {
+  const dates = [...new Set((data.shopping?.history || []).filter((x) => x.itemId === item.id && x.date).map((x) => x.date))].sort();
+  if (dates.length < 2) return null;
+  const span = (new Date(dates[dates.length - 1]) - new Date(dates[0])) / 86400000;
+  const every = Math.round(span / (dates.length - 1));
+  if (every < 2) return null;
+  const last = dates[dates.length - 1];
+  return { every, last, next: plusDays(last, every), times: dates.length };
+}
+
+// 最近 90 天买消耗品（购物记录里有价格的）按类别平均到每个月
+export function monthlyConsumables(data, now = localDay()) {
+  const from = plusDays(now, -90);
+  const items = new Map(data.items.map((i) => [i.id, i]));
+  const byTag = {};
+  for (const x of data.shopping?.history || []) {
+    if (!(x.price > 0) || x.date < from || x.date > now) continue;
+    const tag = items.get(x.itemId)?.tags[0] || '其他';
+    byTag[tag] = (byTag[tag] || 0) + x.price;
+  }
+  return Object.entries(byTag).map(([tag, sum]) => ({ tag, perMonth: Math.round(sum / 3) })).sort((a, b) => b.perMonth - a.perMonth);
+}
+
+// 购物清单上一样东西大概多少钱：上次买它的价格（购物记录，按物品或同名），没有就用建档时的价格
+export function shopEstimate(data, entry) {
+  const hist = [...(data.shopping?.history || [])].reverse();
+  const hit = hist.find((x) => x.price > 0 && ((entry.item && x.itemId === entry.item.id) || x.name === entry.name));
+  if (hit) return hit.price;
+  const p = Number(entry.item?.purchasePrice);
+  return p > 0 ? p : null;
+}
+
+// 衣服穿一次多少钱：价格 ÷ 穿过几次（穿着记录 item.worn，从开始用「今天穿什么」算起）
+export const WEAR_TAGS = ['衣服', '运动服', '鞋'];
+export function costPerWear(item) {
+  if (!WEAR_TAGS.includes(item.tags[0])) return null;
+  const price = Number(item.purchasePrice);
+  if (!(price > 0)) return null;
+  const wears = (item.worn || []).length;
+  return { price, wears, each: wears ? Math.round((price / wears) * 10) / 10 : null };
+}
+
 export function shoppingList(data, now = new Date()) {
   const s = data.shopping || {};
   const day = localDay();
@@ -233,6 +282,11 @@ export function shoppingList(data, now = new Date()) {
     if (item.consumable && qty === 0) why = '已用完';
     else if (item.consumable && item.runningLow) why = '快用完了';
     else if (item.consumable && item.lowAt > 0 && qty <= item.lowAt) why = `只剩 ${qty}`;
+    else if (item.consumable) {
+      // 没点「快用完了」，但按平时多久买一次，差不多该买了
+      const u = usageRate(data, item);
+      if (u && plusDays(u.next, -USAGE_SOON) <= day) why = `平时 ${u.every} 天买一次，差不多该买了`;
+    }
     let expiring = false;
     const exp = parseDate(item.fields?.['保质期']);
     if (!why && exp) {
@@ -274,6 +328,11 @@ export function parseDate(text) {
   return d ? new Date(y, mo - 1, d) : new Date(y, mo, 0); // 只写到月份时按月底算
 }
 
+// 买来 7 天内能退的东西（七天无理由）：建档时按购买日期自动填「退货截止」，到期前 3 天提醒「有问题吗」
+export const RETURN_TAGS = ['电子产品', '衣服', '运动服', '鞋', '包', '运动器材'];
+export const RETURN_DAYS = 7;
+export const RETURN_REMIND = 3;
+
 export function reminders(data, days = data.reminderDays || 30) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -287,6 +346,11 @@ export function reminders(data, days = data.reminderDays || 30) {
       const left = Math.round((date - today) / 86400000);
       // 过期的食品药品一直提醒到归档为止；保修过期 30 天后就不再提
       if (left <= days && (kind === '保质期' || left >= -30)) out.push({ item, kind, date: text, days: left });
+    }
+    const ret = parseDate(item.returnBy);
+    if (ret) {
+      const left = Math.round((ret - today) / 86400000);
+      if (left >= 0 && left <= RETURN_REMIND) out.push({ item, kind: '退货', date: item.returnBy, days: left });
     }
   }
   return out.sort((a, b) => a.days - b.days);
