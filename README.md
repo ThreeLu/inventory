@@ -19,4 +19,6 @@ js/xlsx.js          生成批量标签用的 Excel
 tools/import_items.py   Mac 上批量录入（Claude Code 看照片 → 清单 → 写入数据仓库）
 .claude/skills/batch-import/  给 Claude Code 的批量录入流程
 CLAUDE.md           给 Claude Code 的开发说明
+js/scan.js          网页内扫码；js/trip.js 出差推荐（天气、规则、DeepSeek）
+tests/              自动测试（假 GitHub + 真浏览器），推送后 GitHub Actions 自动跑
 ```

@@ -1,7 +1,8 @@
 // GitHub REST API 的最小封装：读文件、建 blob、一次提交多个文件。
 // 所有请求都带 cache: 'no-store'，因为 GitHub API 默认会被浏览器缓存 60 秒。
 
-const API = 'https://api.github.com';
+// 自动测试会把它指向本地的假 GitHub（tests/fake_github.py）；正常使用时就是 api.github.com
+const API = localStorage.getItem('inventory-api-base') || 'https://api.github.com';
 
 export class GitHubError extends Error {
   constructor(message, status) {

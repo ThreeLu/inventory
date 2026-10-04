@@ -31,6 +31,8 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 REPO = "ThreeLu/inventory-data"
+# 自动测试时指向本地的假 GitHub（tests/fake_github.py）
+API_BASE = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 DATA_FILE = "inventory.json"
 PREFIX_MAX, SEQ_MAX = 899, 9999  # 编号 XXX-YYYY
 PHOTO_TYPES = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
@@ -58,7 +60,7 @@ class GitHub:
 
     def request(self, method, path, body=None, raw=False):
         req = urllib.request.Request(
-            f"https://api.github.com/repos/{self.repo}{path}", method=method,
+            f"{API_BASE}/repos/{self.repo}{path}", method=method,
             data=json.dumps(body).encode() if body is not None else None)
         req.add_header("Authorization", f"Bearer {self.token}")
         req.add_header("Accept", "application/vnd.github.raw" if raw else "application/vnd.github+json")

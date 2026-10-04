@@ -1,0 +1,25 @@
+# 每次推送都在真浏览器里把主要功能跑一遍（连假的 GitHub，不需要任何令牌）
+name: 自动测试
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright openpyxl pillow certifi
+      - run: python -m playwright install --with-deps chromium
+      - run: python tests/test_app.py
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 失败截图
+          path: tests/artifacts/

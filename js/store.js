@@ -30,6 +30,7 @@ export function migrate(data) {
   data.assetHighWater ||= {};
   bumpHighWater(data);
   for (const item of data.items) if (item.consumable === undefined) item.consumable = defaultConsumable(data, item.tags);
+  data.trips ||= [];
   // 旧版用 labelPrinted 布尔值，现在是 label: 'none' | 'pending' | 'printed'；旧版编号后段 3 位，现在 4 位
   for (const x of [...data.items, ...data.locations]) {
     if (x.assetId && /^\d{3}-\d{3}$/.test(x.assetId)) x.assetId = `${x.assetId.slice(0, 4)}0${x.assetId.slice(4)}`;
@@ -72,6 +73,33 @@ export function bumpHighWater(data) {
 // 新建时「消耗品」开关的默认值：第一个标签在 consumableTags 里
 export function defaultConsumable(data, tags) {
   return Boolean(tags.length && data.consumableTags.includes(tags[0]));
+}
+
+// 箱子（搬家纸箱、出差的行李箱）是一种特殊的位置：box: 'move' | 'trip'
+export function isBox(data, locId) {
+  return Boolean(data.locations.find((l) => l.id === locId)?.box);
+}
+
+// 移动物品。装进箱子时记住原来的位置（homeLocation），拿出箱子时清掉，方便「全部放回原处」
+export function moveItem(data, item, target) {
+  if (item.location === target) return;
+  if (isBox(data, target)) {
+    if (!isBox(data, item.location)) item.homeLocation = item.location;
+  } else {
+    delete item.homeLocation;
+  }
+  item.location = target;
+  item.updatedAt = new Date().toISOString();
+}
+
+// 借出：超过约定日期，或者没约定但借出超过 30 天，就提醒
+export function loanStatus(item, today = new Date()) {
+  if (!item.loan) return null;
+  const t0 = new Date(today); t0.setHours(0, 0, 0, 0);
+  const since = Math.round((t0 - parseDate(item.loan.date)) / 86400000);
+  const due = item.loan.due ? Math.round((parseDate(item.loan.due) - t0) / 86400000) : null;
+  const overdue = due !== null ? due < 0 : since > 30;
+  return { since, due, overdue };
 }
 
 // 消耗品数量为 0 就是「用完了」，等着补货

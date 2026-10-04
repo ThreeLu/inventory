@@ -359,3 +359,14 @@ nav .dot { position: absolute; top: 1px; right: -6px; width: 8px; height: 8px; b
 .restock-row button { flex: none; }
 
 [hidden] { display: none !important; }
+
+/* 出差、装箱、借出 */
+.card.notice.warn-card { border-color: var(--danger); }
+.group-title { font-weight: 600; font-size: 14px; color: var(--accent); margin: 12px 0 2px; }
+.block { display: block; }
+.weather-row { display: flex; gap: 6px; overflow-x: auto; margin: 6px 0; }
+.weather-day { flex: none; background: var(--chip); border-radius: 8px; padding: 4px 8px; font-size: 12px; display: flex; flex-direction: column; align-items: center; }
+.card ul { padding-left: 20px; margin: 0; }
+.card ul li { margin-bottom: 4px; }
+
+[hidden] { display: none !important; }

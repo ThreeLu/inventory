@@ -38,7 +38,14 @@
 
 ## 测试
 
-改了网页代码后：
-1. `python3 -m http.server 8765 --bind 127.0.0.1`（在仓库根目录）。
-2. 用 Playwright 跑主要流程（登录、新建带照片、扫码、编辑、归档、标签 Excel），检查控制台没有报错。令牌用 `gh auth token`。
-3. 测试会往真实数据仓库写东西：**用户开始正式使用后，不要再拿真实数据仓库做写入测试**，改用一个临时测试仓库（在设置页里换仓库名）。
+- `python3 tests/test_app.py`：真浏览器 + 本地假 GitHub（`tests/fake_github.py`），天气和 DeepSeek 用假数据，不联网、不需要令牌。推送后 GitHub Actions（`.github/workflows/test.yml`）自动跑。**改了功能就在这里加对应的步骤**；只跑部分：`python3 tests/test_app.py 借出 出差`。
+- 网页通过 `localStorage['inventory-api-base']` 换 API 地址，导入脚本通过环境变量 `GITHUB_API_URL`，测试就是这样接到假 GitHub 的。
+- 摄像头扫码没有放进自动测试（要假摄像头视频），改了 `js/scan.js` 要手动测：Chromium 加 `--use-fake-device-for-media-stream --use-file-for-fake-video-capture=<y4m>`。
+- **绝不拿用户的真实数据仓库做写入测试。**需要连真 GitHub 时，复制数据建一个临时私有仓库，测完删掉。
+
+## 其他功能速记
+
+- 装箱：箱子是带 `box: 'move'|'trip'` 的位置，装进去的物品记 `homeLocation`，「全部放回原处」靠它；统一用 `store.js` 的 `moveItem()` 移动物品。
+- 出差：`js/trip.js`。天气用 Open-Meteo（16 天内逐日预报，否则按月份估计）；规则层永远可用；设置里填了 DeepSeek 密钥（存在设备的 localStorage `inventory-deepseek`）就让 AI 挑东西和搭配衣服，只发名称、类别、字段。AI 返回的 id 会过滤掉不存在的。行程存在 `data.trips`。
+- 借出：`item.loan = { to, date, due? }`，超过约定或没约定超过 30 天提醒；每周提醒邮件也列出来。
+- 令牌到期日由用户在设置里填（GitHub 不把到期时间暴露给网页），提前 14 天在首页提醒。
