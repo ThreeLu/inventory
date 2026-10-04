@@ -257,6 +257,11 @@ nav .dot-badge { position: absolute; top: 0; right: -4px; width: 8px; height: 8p
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
 }
 .toast.error { background: var(--danger); color: #fff; }
+.toast.undo { display: flex; align-items: center; gap: 14px; }
+.toast-undo { flex: none; min-height: 0; padding: 2px 0; border: 0; background: none; color: var(--accent-soft); font-weight: 700; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
+.sync-pill { position: fixed; z-index: 30; top: calc(8px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); min-height: 28px; padding: 0 12px; border-radius: 14px; font-size: 12px; font-weight: 500; background: var(--chip); color: var(--muted); box-shadow: var(--shadow); white-space: nowrap; max-width: calc(100% - 32px); overflow: hidden; text-overflow: ellipsis; }
+.sync-pill.offline { background: color-mix(in srgb, var(--amber) 18%, var(--card)); color: var(--amber); }
+.sync-pill.error { background: color-mix(in srgb, var(--danger) 16%, var(--card)); color: var(--danger); }
 .busy { position: fixed; inset: 0; z-index: 80; background: rgba(0, 0, 0, 0.3); display: flex; align-items: center; justify-content: center; }
 .busy-box { background: var(--card); padding: 18px 22px; border-radius: 16px; font-weight: 600; max-width: 80%; text-align: center; }
 
@@ -397,3 +402,7 @@ p.error { color: var(--danger); }
 .help li { margin: 4px 0; line-height: 1.55; font-size: 15px; }
 
 [hidden] { display: none !important; }
+
+/* 顺手记账 */
+.ledger-line { display: flex; align-items: center; gap: 10px; min-height: 44px; border-bottom: 0.5px solid var(--line); }
+.ledger-line select { width: auto; max-width: 9em; flex: none; }

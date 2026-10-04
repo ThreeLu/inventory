@@ -73,6 +73,18 @@ def seed():
     return {"inventory.json": json.dumps(data, ensure_ascii=False).encode()}
 
 
+# 账本（顺手记账写进去）：只放用得到的，账户名、数字都是编的
+def ledger_seed():
+    cat = lambda i, name, group: {"id": i, "name": name, "kind": "expense", "group": group}  # noqa: E731
+    data = {"version": 1, "accounts": [{"id": "a-live", "name": "测试卡", "currency": "CNY", "opening": 0},
+                                       {"id": "a-usd", "name": "美元账户", "currency": "USD", "opening": 0}],
+            "categories": [cat("c-snack", "零食", "food"), cat("c-drink", "饮料奶茶", "food"), cat("c-tissue", "纸巾清洁", "daily"),
+                           cat("c-medical", "买药", "daily"), cat("c-gadget", "电子耗材", "daily"), cat("c-dorm", "宿舍小物件", "daily"),
+                           cat("c-wish", "心愿", "none"), {"id": "i-job", "name": "兼职", "kind": "income"}],
+            "tx": []}
+    return {"finance.json": json.dumps(data, ensure_ascii=False).encode()}
+
+
 def png(path, rgb=(200, 80, 60)):
     w = h = 64
     raw = b"".join(b"\x00" + bytes(rgb) * w for _ in range(h))
@@ -95,11 +107,18 @@ def step(name):
 
 
 class Ctx:
-    def __init__(self, page, repo):
-        self.page, self.repo = page, repo
+    def __init__(self, page, repo, ledger=None):
+        self.page, self.repo, self.ledger = page, repo, ledger
         self.prompt = ""
 
+    def ledger_tx(self):
+        return json.loads(self.ledger.read("finance.json"))["tx"]
+
     def data(self):
+        # 修改是先存手机、后台上传的：等待上传队列清空再读仓库
+        self.page.wait_for_function(
+            "() => { try { const q = JSON.parse(localStorage.getItem('inventory-queue')); return !q || !q.items.length; } catch { return true; } }",
+            timeout=15000)
         return json.loads(self.repo.read("inventory.json"))
 
     def item(self, name):
@@ -653,6 +672,16 @@ def _(c):
     sheet.get_by_label("鸡蛋 价格").fill("8")
     sheet.get_by_label("护手霜 建档").check()
     sheet.get_by_role("button", name="记好了").click()
+    # 顺手记账：有价格的两样问要不要记到账本；类别按名字 / 类别猜，可以改；美元账户不出现
+    lsheet = p.locator(".sheet", has_text="顺手记一笔账")
+    expect(lsheet.get_by_label("布洛芬片 记成")).to_have_value("c-medical")
+    expect(lsheet.get_by_label("从哪个账户付").locator("option")).to_have_count(1)
+    lsheet.get_by_label("鸡蛋 记成").select_option("c-snack")
+    expect(lsheet).to_contain_text("会记 2 笔")
+    lsheet.get_by_role("button", name="记到账本").click()
+    expect(p.get_by_text("已记到账本")).to_be_visible()
+    tx = c.ledger_tx()
+    assert sorted((t["category"], t["amount"], t["note"], t["account"]) for t in tx) == [("c-medical", 12.5, "布洛芬片", "a-live"), ("c-snack", 8, "鸡蛋", "a-live")], tx
     expect(p.get_by_text("买回来还没建档")).to_be_visible()
     d = c.data()
     m = next(i for i in d["items"] if i["name"] == "布洛芬片")
@@ -679,6 +708,79 @@ def _(c):
     expect(p.locator(".shop-row", has_text="布洛芬片")).to_contain_text("只剩 5")
     c.go("#/stats")
     expect(p.get_by_text("购物花费")).to_be_visible()
+
+
+@step("顺手记账：新建填了价格问要不要记；小票导入的建档不再问")
+def _(c):
+    p = c.page
+    n = len(c.ledger_tx())
+    c.go("#/new")
+    p.get_by_label("名称").fill("充电头")
+    p.get_by_label("位置").select_option(label="　　书桌抽屉 Desk Drawer")
+    p.get_by_role("button", name="电子产品", exact=True).click()
+    p.get_by_text("品牌、购买与保修").click()
+    p.get_by_label("价格（元）").fill("39")
+    p.get_by_role("button", name="保存", exact=True).click()
+    c.wait_item("充电头")
+    lsheet = p.locator(".sheet", has_text="顺手记一笔账")
+    expect(lsheet.get_by_label("充电头 记成")).to_have_value("c-gadget")
+    lsheet.get_by_role("button", name="记到账本").click()
+    expect(p.get_by_text("已记到账本")).to_be_visible()
+    tx = c.ledger_tx()
+    assert len(tx) == n + 1 and tx[-1]["note"] == "充电头" and tx[-1]["amount"] == 39 and tx[-1]["date"] == date.today().isoformat(), tx[-1]
+    # 账本的小票导入放进「还没建档」的（已经记过账）：建档时带上价格、数量，不再问记账
+    d = c.data()
+    d.setdefault("shopping", {}).setdefault("toFile", []).append({"id": "mrcpt", "name": "收纳盒", "price": 25, "qty": 2, "date": date.today().isoformat(), "from": "receipt", "paid": True})
+    c.repo.external_write("inventory.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go("#/")
+    p.reload()
+    expect(p.locator(".cell", has_text="1 样买回来还没建档")).to_be_visible()
+    c.go("#/shopping")
+    expect(p.get_by_text("（小票导入）")).to_be_visible()
+    p.get_by_role("link", name="建档").click()
+    expect(p.get_by_label("名称")).to_have_value("收纳盒")
+    expect(p.get_by_label("价格（元）")).to_have_value("25")
+    expect(p.get_by_label("数量")).to_have_value("2")
+    p.get_by_label("位置").select_option(label="储物间 Storage Room")
+    p.get_by_role("button", name="日用杂物", exact=True).click()
+    p.get_by_role("button", name="保存", exact=True).click()
+    c.wait_item("收纳盒")
+    p.wait_for_timeout(500)
+    expect(p.locator(".sheet", has_text="顺手记一笔账")).to_have_count(0)
+    assert len(c.ledger_tx()) == n + 1 and c.data()["shopping"]["toFile"] == []
+
+
+@step("用完了、重新打印直接做，可以撤销；没网也能改，有网自动上传并和另一台设备的修改合并")
+def _(c):
+    p = c.page
+    tb = c.item("布洛芬片")
+    c.go(f"#/item/{tb['id']}")
+    p.get_by_role("button", name="用完了", exact=True).click()
+    toast = p.locator(".toast.undo")
+    expect(toast).to_contain_text("用完了，已放进购物清单")
+    assert c.item("布洛芬片")["quantity"] == 0
+    toast.get_by_role("button", name="撤销").click()
+    expect(p.get_by_text("已撤销")).to_be_visible()
+    t = c.item("布洛芬片")
+    assert t["quantity"] == tb["quantity"] and t.get("notes", "") == tb.get("notes", ""), t
+    # 没网：先存手机，页面马上变，顶上提示；刷新还在；有网后自动上传，别的设备的修改不丢
+    p.route(f"{API}/**", lambda r: r.abort())
+    p.get_by_role("button", name="快用完了").click()
+    expect(p.get_by_text("快用完了（")).to_be_visible()
+    expect(p.locator(".busy")).to_have_count(0)
+    expect(p.locator(".sync-pill")).to_contain_text("没网，1 项存在手机上")
+    p.reload()
+    expect(p.get_by_text("快用完了（")).to_be_visible()
+    assert "runningLow" not in json.loads(c.repo.read("inventory.json"))["items"][[i["id"] for i in json.loads(c.repo.read("inventory.json"))["items"]].index(tb["id"])]
+    d = json.loads(c.repo.read("inventory.json"))
+    next(i for i in d["items"] if i["name"] == "身份证")["notes"] = "另一台设备写的"
+    c.repo.external_write("inventory.json", json.dumps(d, ensure_ascii=False).encode())
+    p.unroute(f"{API}/**")
+    p.evaluate("window.dispatchEvent(new Event('online'))")
+    d = c.data()
+    assert next(i for i in d["items"] if i["id"] == tb["id"]).get("runningLow"), "离线的修改没传上去"
+    assert next(i for i in d["items"] if i["name"] == "身份证")["notes"] == "另一台设备写的"
+    expect(p.locator(".sync-pill")).to_be_hidden()
 
 
 @step("换季整理：列出该收起来的，按勾选移动")
@@ -735,7 +837,7 @@ def _(c):
     assert out.returncode == 0, out.stdout + out.stderr
     d = c.data()
     got = {i["name"]: (i["assetId"], i["label"], i["consumable"]) for i in d["items"] if i["name"] in ("数据线", "条纹衬衫", "薯片")}
-    assert got == {"数据线": ("100-0005", "pending", False), "条纹衬衫": ("110-0006", "none", False),
+    assert got == {"数据线": ("100-0006", "pending", False), "条纹衬衫": ("110-0006", "none", False),
                    "薯片": ("280-0001", "pending", True)}, got
 
 
@@ -787,7 +889,8 @@ def main():
     only = sys.argv[1:]
     ART.mkdir(exist_ok=True)
     repo = FakeRepo(seed())
-    serve(repo, API_PORT)
+    ledger = FakeRepo(ledger_seed())
+    serve({REPO: repo, "test/finance-data": ledger}, API_PORT)
     handler = partial(SimpleHTTPRequestHandler, directory=str(ROOT))
     handler.log_message = lambda *a: None
     app = ThreadingHTTPServer(("127.0.0.1", APP_PORT), handler)
@@ -800,7 +903,7 @@ def main():
         ctx.set_default_timeout(10000)
         page = ctx.new_page()
         page.on("pageerror", lambda e: errors.append(str(e)))
-        c = Ctx(page, repo)
+        c = Ctx(page, repo, ledger)
         page.on("dialog", lambda d: d.accept(c.prompt) if d.type == "prompt" else d.accept())
         fake_externals(page)
         for i, (name, fn) in enumerate(STEPS):

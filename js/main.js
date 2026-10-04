@@ -1,6 +1,6 @@
 import { GitHub } from './github.js';
 import {
-  Store, normalizeAssetId, newId, assertAssetFree, LOCATION_PREFIX,
+  Store, diff, apply as applyPatch, normalizeAssetId, newId, assertAssetFree, LOCATION_PREFIX,
   defaultLabel, setLabel, LABEL_TEXT, prefixForTags, defaultConsumable, isDepleted, ARCHIVE_REASONS,
   shoppingData, shoppingList, shopWeek,
   isBox, isBag, ensureHome, moveItem, borrowStatus,
@@ -15,6 +15,7 @@ import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
 import { startScanner, assetFromScan } from './scan.js';
 import { PURPOSES, geocode, weatherFor, summarizeWeather, rulePlan, aiPlan } from './trip.js';
+import { ledgerGitHub, readLedger, guessCategory, groupLines, addLedgerExpenses } from './bridge.js';
 
 const SETTINGS_KEY = 'inventory-settings';
 const DEFAULT_REPO = 'ThreeLu/inventory-data';
@@ -40,7 +41,29 @@ function readSettings() {
 function connect() {
   gh = new GitHub({ token: settings.token, repo: settings.repo || DEFAULT_REPO });
   store = new Store(gh);
+  store.onStatus = showSync;
   store.loadCached();
+  showSync(store.status);
+}
+
+// 顶上的小标记：有没上传的修改时显示。上传很快的话不显示（免得一闪一闪）
+const syncPill = h('button', { class: 'sync-pill', type: 'button', hidden: true, onclick: () => {
+  if (store?.status.state === 'error') toast(`上传失败：${store.status.error}（改动都还在手机上）`, 'error');
+  store?.sync();
+} });
+let syncTimer = null;
+let renderedData = '';
+function showSync(st) {
+  clearTimeout(syncTimer);
+  const n = st.pending;
+  const text = st.state === 'offline' ? `没网，${n} 项存在手机上，有网自动上传`
+    : st.state === 'error' ? `${n} 项没传上去，点一下看看`
+      : n ? `正在上传 ${n} 项` : '';
+  const show = () => { syncPill.textContent = text; syncPill.hidden = !text; syncPill.className = `sync-pill ${st.state}`; };
+  if (st.state === 'offline' || st.state === 'error' || !text) show();
+  else syncTimer = setTimeout(show, 1500);
+  // 传完以后，如果合并进了别的设备的修改，页面刷新一下（正在填的表单、扫码不动）
+  if (st.state === 'ok' && store?.data && !EDITING_ROUTES.test(currentPath()) && JSON.stringify(store.data) !== renderedData) render();
 }
 
 function currentPath() {
@@ -82,6 +105,8 @@ async function migrateLocalAiKey() {
 
 function boot() {
   setupNav();
+  document.body.append(syncPill);
+  window.addEventListener('online', () => store?.sync());
   // 扫码进来的网址是 ?a=290-0001，转成页面内的路由
   const scanned = new URLSearchParams(window.location.search).get('a');
   if (scanned) history.replaceState(null, '', `${window.location.pathname}#/a/${encodeURIComponent(scanned)}`);
@@ -199,6 +224,7 @@ function render() {
     break;
   }
   view.replaceChildren(content || notFound('没有这个页面'));
+  renderedData = store?.data ? JSON.stringify(store.data) : '';
   for (const a of nav.querySelectorAll('a[href]')) {
     const target = a.getAttribute('href').slice(1);
     a.classList.toggle('active', (NAV_GROUPS[target] || []).some((re) => re.test(path)));
@@ -215,21 +241,47 @@ function toast(message, kind = 'ok') {
   setTimeout(() => el.remove(), kind === 'error' ? 6000 : 2500);
 }
 
+// 常用的操作不先问「确定吗」：直接做，底部提示几秒，点「撤销」改回去
+function undoToast(text, onUndo) {
+  for (const el of document.querySelectorAll('.toast.undo')) el.remove();
+  const el = h('div', { class: 'toast undo', role: 'status' }, h('span', {}, text),
+    h('button', { type: 'button', class: 'toast-undo', onclick: () => { el.remove(); onUndo(); } }, '撤销'));
+  document.body.append(el);
+  setTimeout(() => el.remove(), 6000);
+}
+
+// 能撤销的修改：撤销时只把这次改到的东西改回去，这期间别的修改不受影响
+async function saveUndoable(message, mutate, doneText) {
+  const before = structuredClone(store.data);
+  const result = await saving('正在保存…', () => store.save(message, mutate));
+  if (result === false) return result;
+  const back = diff(store.data, before);
+  delete back.obj.assetHighWater; // 编号只增不减
+  undoToast(doneText, () => saving('正在撤销…', () => store.save(`撤销：${message}`, (data) => { applyPatch(data, back); }))
+    .then(() => { toast('已撤销'); render(); }).catch(() => {}));
+  return result;
+}
+
 function busy(message) {
   const el = h('div', { class: 'busy' }, h('div', { class: 'busy-box' }, message));
   document.body.append(el);
   return { set: (m) => { el.firstChild.textContent = m; }, done: () => el.remove() };
 }
 
+// 「正在保存」只在真的要等的时候出现：普通修改先存手机，马上就好，不弹；带照片、问 AI 这种要等的才弹
 async function saving(message, fn) {
-  const b = busy(message);
+  let b = null;
+  let text = message;
+  const timer = setTimeout(() => { b = busy(text); }, 250);
+  const handle = { set: (m) => { text = m; b?.set(m); } };
   try {
-    return await fn(b);
+    return await fn(handle);
   } catch (e) {
     toast(e.message, 'error');
     throw e;
   } finally {
-    b.done();
+    clearTimeout(timer);
+    b?.done();
   }
 }
 
@@ -329,13 +381,14 @@ function labelChip(obj) {
 }
 
 // 改一件物品或一个位置的标签状态
-function changeLabel(type, id, state, message) {
-  return saving('正在保存…', () => store.save(message, (data) => {
+function changeLabel(type, id, state, message, undoText) {
+  const mutate = (data) => {
     const x = (type === 'item' ? data.items : data.locations).find((o) => o.id === id);
     if (!x) throw new Error('找不到了，可能已经在别处被删除');
     setLabel(x, state);
     if (type === 'item') x.updatedAt = new Date().toISOString();
-  })).then(render).catch(() => {});
+  };
+  return (undoText ? saveUndoable(message, mutate, undoText) : saving('正在保存…', () => store.save(message, mutate))).then(render).catch(() => {});
 }
 
 // 按当前状态给出的按钮：待打印 → 打印这一张 / 标记已打印；已打印 → 重新打印；不贴 → 要贴标签
@@ -352,8 +405,7 @@ function labelButtons(type, obj) {
   if (obj.label === 'printed') {
     return [h('button', {
       class: 'secondary',
-      onclick: () => confirm(`重新打印 ${obj.assetId} 的标签？编号不变，新标签贴在旧标签的位置。`)
-        && changeLabel(type, obj.id, 'pending', `重新打印：${obj.assetId} ${name}`),
+      onclick: () => changeLabel(type, obj.id, 'pending', `重新打印：${obj.assetId} ${name}`, `${obj.assetId} 放回待打印，编号不变`),
     }, '重新打印')];
   }
   return [h('button', { class: 'secondary', onclick: () => changeLabel(type, obj.id, 'pending', `要贴标签：${obj.assetId} ${name}`) }, '要贴标签')];
@@ -507,12 +559,15 @@ function itemView(id) {
   const fields = Object.entries(item.fields || {});
   const due = reminders(store.data).filter((r) => r.item.id === id);
 
-  const update = (message, fn) => saving('正在保存…', () => store.save(message, (data) => {
+  const change = (fn) => (data) => {
     const it = data.items.find((i) => i.id === id);
     if (!it) throw new Error('这件物品已经在别处被删除了');
     fn(it);
     it.updatedAt = new Date().toISOString();
-  })).then(render).catch(() => {});
+  };
+  const update = (message, fn) => saving('正在保存…', () => store.save(message, change(fn))).then(render).catch(() => {});
+  // 直接做、可以撤销（不再弹「确定吗」）
+  const updateUndo = (message, fn, doneText) => saveUndoable(message, change(fn), doneText).then(render).catch(() => {});
 
   const note = (it, text) => { it.notes = [it.notes, `${today()} ${text}`].filter(Boolean).join('\n'); };
 
@@ -545,8 +600,7 @@ function itemView(id) {
     it.quantity = Math.max(0, (Number(it.quantity) || 1) - 1);
     if (it.quantity === 0) note(it, '用完');
   });
-  const useUp = () => confirm(`「${item.name}」用完了？\n会放进购物清单，编号和记录都保留。`)
-    && update(`用完：${item.name}`, (it) => { it.quantity = 0; delete it.runningLow; note(it, '用完'); });
+  const useUp = () => updateUndo(`用完：${item.name}`, (it) => { it.quantity = 0; delete it.runningLow; note(it, '用完'); }, `「${item.name}」用完了，已放进购物清单`);
   const runLow = (on) => update(`${on ? '快用完了' : '还够用'}：${item.name}`, (it) => { if (on) it.runningLow = today(); else delete it.runningLow; });
   const restock = () => openRestock(item);
   const bs = borrowStatus(item);
@@ -562,12 +616,12 @@ function itemView(id) {
       }),
     });
   };
-  const giveBack = () => confirm(`《${item.name}》已经还给${item.borrow.from}了？\n会归档这本书，借阅记录保留。`) && update(`归还：${item.name}`, (it) => {
+  const giveBack = () => updateUndo(`归还：${item.name}`, (it) => {
     note(it, `已归还${it.borrow.from}（${it.borrow.date} 借）`);
     it.archived = true;
     it.archiveReason = '已归还';
     it.archivedAt = today();
-  });
+  }, `《${item.name}》已归还，归档了`);
 
   const remove = async () => {
     if (!confirm(`彻底删除「${item.name}」？\n\n删除只用于录错了、重复录入。扔掉、送人、用完不再买请用「归档」，记录会保留。\n（删除后编号也不会再分给别的东西）`)) return;
@@ -626,10 +680,10 @@ function itemView(id) {
       bs ? [h('button', { onclick: giveBack }, '已归还'), h('button', { class: 'secondary', onclick: renew }, '续借')] : null,
       item.leftBehind ? [
         h('button', { onclick: () => update(`找回来了：${item.name}`, (it) => { note(it, `找回来了（${it.leftBehind.date} 落在${it.leftBehind.place}）`); delete it.leftBehind; }) }, '找回来了'),
-        h('button', { class: 'secondary', onclick: () => confirm(`「${item.name}」找不到了？会归档（原因：丢失）。`) && update(`找不到了：${item.name}`, (it) => {
+        h('button', { class: 'secondary', onclick: () => updateUndo(`找不到了：${item.name}`, (it) => {
           note(it, `落在${it.leftBehind.place}，找不到了`); delete it.leftBehind;
           it.archived = true; it.archiveReason = '丢失'; it.archivedAt = today();
-        }) }, '找不到了'),
+        }, `「${item.name}」已归档（丢失）`) }, '找不到了'),
       ] : null,
       !item.archived && canWash(item) ? (
         !item.laundry ? h('button', { class: 'secondary', onclick: () => setLaundry([id], 'dirty', `放进洗衣篮：${item.name}`) }, '放进洗衣篮')
@@ -687,8 +741,8 @@ function formView(id, q = {}) {
   const blank = {
     id: itemId, name: q.name || '', assetId: null, location: q.loc || '',
     tags: q.tags ? q.tags.split(',').filter((t) => store.data.tags.includes(t)) : [],
-    quantity: 1, description: '', fields: {}, photos: [], receipts: [],
-    manufacturer: '', modelNumber: '', serialNumber: '', purchaseDate: '', purchasePrice: null,
+    quantity: Math.max(1, Number(q.qty) || 1), description: '', fields: {}, photos: [], receipts: [],
+    manufacturer: '', modelNumber: '', serialNumber: '', purchaseDate: q.date || '', purchasePrice: q.price ? Number(q.price) : null,
     purchaseFrom: '', warrantyExpires: '', notes: '', archived: false,
   };
   const draft = existing ? structuredClone(existing)
@@ -994,6 +1048,10 @@ function formView(id, q = {}) {
       }, { uploads, removes: removed.flatMap((p) => [p.file, p.thumb]) });
     });
     toast(savedAsset !== draft.assetId ? `已保存（编号 ${savedAsset}）` : '已保存');
+    // 新买的东西填了价格：问一下要不要顺手记到账本（从小票导入、已经记过账的不问）
+    if (!existing && draft.purchasePrice > 0 && !q.paid) {
+      offerLedger([{ name: draft.name, price: draft.purchasePrice, tag: draft.tags[0] }], { date: draft.purchaseDate || today() });
+    }
     if (andNext) {
       go(`#/new?loc=${draft.location}&tags=${encodeURIComponent(draft.tags.join(','))}&t=${Date.now()}`, true);
       window.scrollTo(0, 0);
@@ -1018,7 +1076,7 @@ function formView(id, q = {}) {
     h('label', {}, '数量', bind('quantity', { type: 'number', min: 0, inputmode: 'numeric' })),
     h('div', { class: 'label' }, '其他信息', fieldBox),
     h('label', {}, '描述', bind('description', { multiline: true, rows: 2 })),
-    h('details', { open: Boolean(draft.manufacturer || draft.purchaseDate || draft.serialNumber || draft.warrantyExpires) },
+    h('details', { open: Boolean(draft.manufacturer || draft.purchaseDate || draft.purchasePrice || draft.serialNumber || draft.warrantyExpires) },
       h('summary', {}, '品牌、购买与保修'),
       h('label', {}, '品牌', bind('manufacturer')),
       h('label', {}, '型号', bind('modelNumber')),
@@ -1299,6 +1357,8 @@ function notices() {
   // 购物清单：周六、周日（去超市前后）才在首页提
   const shop = [0, 6].includes(new Date().getDay()) ? shoppingList(store.data) : [];
   if (shop.length) out.push({ href: '#/shopping', ic: 'cart', color: 'var(--amber)', title: `这周要买 ${shop.length} 样`, meta: shop.slice(0, 2).map((e) => e.name).join('、') });
+  const toFile = store.data.shopping?.toFile || [];
+  if (toFile.length) out.push({ href: '#/shopping', ic: 'plus', color: 'var(--accent)', title: `${toFile.length} 样买回来还没建档`, meta: toFile.slice(0, 2).map((e) => e.name).join('、') });
   const trips = store.data.trips.filter((t) => t.status === 'packed');
   if (trips.length) out.push({ href: `#/trip/${trips[0].id}`, ic: 'suitcase', color: '#5f7fa8', title: '行李箱里还有东西', meta: trips[0].city });
   const pending = store.pendingLabels().length;
@@ -1647,13 +1707,12 @@ function seasonView() {
     const moves = [...plan.bring.map((i) => [i, plan.wardrobe]), ...plan.store.map((i) => [i, storageFor(store.data, i)])]
       .filter(([i, to]) => chosen.has(i.id) && to);
     if (!moves.length) return toast('没有勾选要整理的衣服', 'error');
-    if (!confirm(`按勾选移动 ${moves.length} 件衣服？`)) return;
-    await saving('正在保存…', () => store.save(`换季整理（${plan.term.name}）：${moves.length} 件`, (data) => {
+    await saveUndoable(`换季整理（${plan.term.name}）：${moves.length} 件`, (data) => {
       for (const [i, to] of moves) {
         const it = data.items.find((x) => x.id === i.id);
         if (it) moveItem(data, it, to.id);
       }
-    })).catch(() => {});
+    }, `移好了 ${moves.length} 件衣服`).catch(() => {});
     render();
   };
   return h('div', {},
@@ -1860,13 +1919,12 @@ function labelsView() {
     a.remove();
     toast('已下载。打印、贴好后，回来点「标记为已打印」');
   };
-  const setState = async (state, question, message) => {
+  const setState = async (state, done, message) => {
     const ids = new Set(chosen().map((p) => p.obj.id));
     if (!ids.size) return toast('没有选中的标签', 'error');
-    if (!confirm(question(ids.size))) return;
-    await saving('正在保存…', () => store.save(message(ids.size), (data) => {
+    await saveUndoable(message(ids.size), (data) => {
       for (const x of [...data.items, ...data.locations]) if (ids.has(x.id)) setLabel(x, state);
-    })).catch(() => {});
+    }, done(ids.size)).catch(() => {});
     render();
   };
   const tabBtn = (key, text) => h('button', {
@@ -1911,9 +1969,9 @@ function labelsView() {
       tab === 'pending'
         ? h('div', { class: 'actions' },
           h('button', { onclick: download }, '下载 Excel'),
-          h('button', { class: 'secondary', onclick: () => setState('printed', (n) => `把选中的 ${n} 张标记为已打印？\n确认已经打好、贴好了再点。`, (n) => `标记已打印：${n} 张标签`) }, '标记为已打印'))
+          h('button', { class: 'secondary', onclick: () => setState('printed', (n) => `${n} 张标记为已打印`, (n) => `标记已打印：${n} 张标签`) }, '标记为已打印'))
         : h('div', { class: 'actions' },
-          h('button', { class: 'secondary', onclick: () => setState('pending', (n) => `把选中的 ${n} 张放回「待打印」重新打印？编号不变。`, (n) => `重新打印：${n} 张标签`) }, '重新打印选中的')))
+          h('button', { class: 'secondary', onclick: () => setState('pending', (n) => `${n} 张放回待打印，编号不变`, (n) => `重新打印：${n} 张标签`) }, '重新打印选中的')))
       : h('div', { class: 'card' }, h('p', {}, tab === 'pending'
         ? '没有待打印的标签。新建时开着「贴标签」的东西会出现在这里。'
         : '还没有打印过标签。')),
@@ -2154,6 +2212,7 @@ function openBought(entries) {
       persistChecked();
       toast(`记好了 ${entries.length} 样`);
       render();
+      offerLedger(rows.map((r) => ({ name: r.e.name, price: Number(r.price.value), tag: r.e.item?.tags[0] })), { date });
     },
   });
 }
@@ -2205,12 +2264,53 @@ function shoppingView() {
       : h('div', { class: 'card' }, h('p', { class: 'muted' }, '没有用完、快用完或快过期的东西。想买什么直接在上面加。')),
     checked.length ? h('div', { class: 'actions sticky' }, h('button', { onclick: () => openBought(checked) }, `买回来了（${checked.length} 样）`)) : null,
     toFile.length ? [h('div', { class: 'section-title' }, '买回来还没建档'), h('div', { class: 'card' }, toFile.map((e) => h('div', { class: 'check-item' },
-      h('span', { class: 'grow' }, e.name, h('span', { class: 'muted small block' }, `${e.date.slice(5)} 买的`)),
-      h('a', { class: 'button small', href: `#/new?name=${encodeURIComponent(e.name)}&shop=${e.id}` }, '建档'),
+      h('span', { class: 'grow' }, e.name, h('span', { class: 'muted small block' }, `${e.date.slice(5)} 买的${e.from === 'receipt' ? '（小票导入）' : ''}`)),
+      h('a', { class: 'button small', href: `#/new?${new URLSearchParams({ name: e.name, shop: e.id, ...(e.price != null ? { price: e.price } : {}), ...(e.qty > 1 ? { qty: e.qty } : {}), date: e.date, ...(e.paid ? { paid: 1 } : {}) })}` }, '建档'),
       h('button', { class: 'small secondary', onclick: () => save(`不建档：${e.name}`, (sh) => { sh.toFile = sh.toFile.filter((x) => x.id !== e.id); }) }, '不用了'))))] : null,
     shopAiCard(),
     h('p', { class: 'muted small center' }, '每周日早上 9 点推送清单到手机',
       spent ? [' · ', h('a', { href: '#/stats' }, `这个月买东西花了 ¥${Math.round(spent)}`)] : null));
+}
+
+// ---------- 顺手记账（写进账本） ----------
+// 买回来的东西有价格时，问一下要不要同时记到账本：同一个类别合成一笔，类别按名字猜、可以改。
+// 账本没开通或令牌没授权 finance-data 时什么都不问。
+async function offerLedger(lines, { date = today(), prefix = '' } = {}) {
+  lines = lines.filter((l) => l.price > 0);
+  if (!lines.length) return;
+  const lgh = ledgerGitHub(settings);
+  let ledger = null;
+  try { ledger = await readLedger(lgh); } catch { /* 读不到账本就不问 */ }
+  if (!ledger?.accounts.length || !ledger.categories.length) return;
+  const rows = lines.map((l) => ({ ...l, category: guessCategory(ledger, l.name, l.tag) }));
+  let account = ledger.account;
+  const catName = (id) => ledger.categories.find((c) => c.id === id)?.name || '';
+  const preview = h('p', { class: 'muted small' });
+  const drawPreview = () => {
+    const groups = groupLines(rows);
+    preview.textContent = `会记 ${groups.length} 笔：${groups.map((g) => `${catName(g.category)} ¥${g.amount}`).join('，')}`;
+  };
+  const body = h('div', { class: 'form' },
+    rows.map((r) => h('div', { class: 'ledger-line' },
+      h('span', { class: 'grow' }, r.name, h('span', { class: 'muted small' }, ` ¥${r.price}`)),
+      h('select', { 'aria-label': `${r.name} 记成`, value: r.category, onchange: (e) => { r.category = e.target.value; drawPreview(); } },
+        ledger.categories.map((c) => h('option', { value: c.id }, c.name))))),
+    h('label', {}, '从哪个账户付', h('select', { 'aria-label': '从哪个账户付', value: account, onchange: (e) => { account = e.target.value; } },
+      ledger.accounts.map((a) => h('option', { value: a.id }, a.name)))),
+    preview,
+    h('p', { class: 'muted small' }, '同一个类别的合成一笔，物品名写在备注里。记错了去账本的流水里改。'));
+  drawPreview();
+  openSheet({
+    title: '顺手记一笔账？', body, confirmText: '记到账本', cancelText: '不用了',
+    onConfirm: async () => {
+      const groups = groupLines(rows);
+      try {
+        await saving('正在记账…', () => addLedgerExpenses(lgh, { date, account, groups, prefix }));
+      } catch { return false; }
+      toast(`已记到账本：${groups.map((g) => `${catName(g.category)} ¥${g.amount}`).join('，')}`);
+      return true;
+    },
+  });
 }
 
 // ---------- 到期提醒 ----------
@@ -2656,8 +2756,7 @@ function listView(id) {
     if (name?.trim()) save(`模板改名：${name.trim()}`, (l) => { l.name = name.trim(); });
   };
   const remove = () => {
-    if (!confirm(`删除模板「${list.name}」？（不影响物品）`)) return;
-    saving('正在删除…', () => store.save(`删除模板：${list.name}`, (data) => { data.lists = data.lists.filter((x) => x.id !== id); }))
+    saveUndoable(`删除模板：${list.name}`, (data) => { data.lists = data.lists.filter((x) => x.id !== id); }, `删掉了模板「${list.name}」`)
       .then(() => go('#/lists', true)).catch(() => {});
   };
   const useIt = () => { tripDraft.current = { kind: list.scene === '出差' ? '出差' : list.scene === '回家' ? '回家' : '其他', listId: id }; go('#/trip/new'); };
@@ -2731,9 +2830,9 @@ function boxPanel(loc, items) {
   const backable = items.filter((i) => i.homeLocation && store.location(i.homeLocation));
   const target = locationSelect('', {}, '全部搬到……');
   const run = (message, fn) => saving('正在保存…', () => store.save(message, fn)).then(render).catch(() => {});
-  const putBack = () => confirm(`把 ${backable.length} 件放回各自原来的位置？`) && run(`拆箱：${loc.name}，${backable.length} 件放回原处`, (data) => {
+  const putBack = () => saveUndoable(`拆箱：${loc.name}，${backable.length} 件放回原处`, (data) => {
     for (const it of data.items) if (it.location === loc.id && it.homeLocation) moveItem(data, it, it.homeLocation);
-  });
+  }, `${backable.length} 件放回了原处`).then(render).catch(() => {});
   const moveAll = () => {
     if (!target.value || target.value === loc.id) return toast('先选要搬到哪里', 'error');
     run(`拆箱：${loc.name} → ${store.location(target.value).name}`, (data) => {

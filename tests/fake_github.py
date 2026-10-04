@@ -2,6 +2,7 @@
 
 数据都在内存里：blob（内容）、tree（路径 → blob）、commit（tree + 父提交）、main 分支指向的提交。
 和真的一样：更新分支时父提交不是最新的，返回 422。
+serve() 可以传一个仓库，也可以传 {"owner/name": 仓库}（测试物品档案和账本互相写的时候用）。
 """
 
 import base64
@@ -51,7 +52,13 @@ class FakeRepo:
             self.head = self.put_commit(self.put_tree(tree), self.head, message)
 
 
-def make_handler(repo: FakeRepo):
+def make_handler(repos):
+    def pick(path):
+        if isinstance(repos, FakeRepo):
+            return repos
+        m = re.search(r"/repos/([^/]+/[^/]+)/", path)
+        return repos.get(m.group(1)) if m else None
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -81,6 +88,9 @@ def make_handler(repo: FakeRepo):
             path, _, query = self.path.partition("?")
             if not self.headers.get("Authorization"):
                 return self.reply(401, {"message": "Bad credentials"})
+            repo = pick(path)
+            if repo is None:
+                return self.reply(404, {"message": "Not Found"})
             if re.search(r"/git/ref/heads/main$", path):
                 return self.reply(200, {"object": {"sha": repo.head}})
             m = re.search(r"/git/commits/(\w+)$", path)
@@ -97,6 +107,9 @@ def make_handler(repo: FakeRepo):
 
         def do_POST(self):
             b = self.body()
+            repo = pick(self.path)
+            if repo is None:
+                return self.reply(404, {"message": "Not Found"})
             with repo.lock:
                 if self.path.endswith("/git/blobs"):
                     return self.reply(201, {"sha": repo.put_blob(base64.b64decode(b["content"]))})
@@ -116,6 +129,9 @@ def make_handler(repo: FakeRepo):
 
         def do_PATCH(self):
             b = self.body()
+            repo = pick(self.path)
+            if repo is None:
+                return self.reply(404, {"message": "Not Found"})
             with repo.lock:
                 if self.path.endswith("/git/refs/heads/main"):
                     if repo.commits[b["sha"]]["parent"] != repo.head and not b.get("force"):
@@ -127,7 +143,7 @@ def make_handler(repo: FakeRepo):
     return Handler
 
 
-def serve(repo: FakeRepo, port: int):
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(repo))
+def serve(repos, port: int):
+    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(repos))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server

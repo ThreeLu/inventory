@@ -34,13 +34,17 @@
 
 ## 代码
 
-- `js/main.js` 路由和页面；`js/scan.js` 网页内扫码（`vendor/jsQR.js`，按需加载）；`js/store.js` 数据读写（`save()` 在最新数据上执行修改函数，422 冲突时重读重试）；`js/github.js` API；`js/util.js` DOM（只用 textContent，不要用 innerHTML 拼数据，令牌存在 localStorage，XSS 会泄露令牌）、图片压缩、照片缓存。
+- **先存手机、后台上传**（`js/store.js`，和账本同一套）：`save()` 在本地数据上改、算 patch（带 id 的列表按 id 增改删和顺序，普通对象按字段，其他整个替换）进 localStorage 队列 `inventory-queue`，页面立刻更新；`sync()` 在 GitHub 最新数据上套 patch 提交（422 重读再来），没网 20 秒后重试、`online` 事件马上重试；顶上 `.sync-pill` 只在没网 / 失败 / 上传超过 1.5 秒时出现。**分了新编号的修改（新建物品、箱子、改编号）自动走 online**（`newAssetIds`，编号要在最新数据上分，免得两台设备撞号），带照片、删照片也走 online。`saving()` 的「正在保存」250ms 后才弹，所以本地保存不闪。测试里 `Ctx.data()` 会先等队列清空。
+- 撤销代替确认：`saveUndoable(message, mutate, doneText)` 先做，底部 `undoToast`「…  撤销」6 秒；撤销 = 把 `diff(改后, 改前)` 套回去（只动这次改到的，`assetHighWater` 不回退）。用在用完了、已归还、找不到了、重新打印、标记已打印、换季、拆箱放回、删模板。删除物品 / 位置 / 类别、改已打印的编号、退出等仍然 `confirm`。
+- 顺手记账（`js/bridge.js`）：同一个令牌直接写账本仓库 `finance-data/finance.json`（`ledgerGitHub`：账本设置的仓库，没有就同账号下的 finance-data），只往 `tx` 里加 `expense`（带 `from: 'inventory'`）。「买回来了」和新建物品填了价格后弹「顺手记一笔账？」：类别按 名字关键词 / 账本里同名的上次类别 / 物品类别 猜（`guessCategory`，关键词表和账本 `js/receipt.js` 的 `BY_WORD` 是同一张，改要两边改），同类合一笔，只列人民币账户，默认账本上次用的账户（`localStorage['ledger-last']`）。读不到账本就不问。
+- 账本的「导入小票」会写 inventory.json：补货（quantity、purchaseDate、notes、清 runningLow）、划掉 `shopping.extra`、`shopping.history` 记 `from: 'receipt'`、新东西进 `shopping.toFile`（带 `qty`、`paid: true`、`from: 'receipt'`）。`toFile` 建档链接带上价格、数量、日期，`paid` 的建档后不再问记账；首页「需要注意」显示还没建档的件数。
+- `js/main.js` 路由和页面；`js/scan.js` 网页内扫码（`vendor/jsQR.js`，按需加载）；`js/github.js` API；`js/util.js` DOM（只用 textContent，不要用 innerHTML 拼数据，令牌存在 localStorage，XSS 会泄露令牌）、图片压缩、照片缓存。
 - `tools/import_items.py`：Mac 上批量录入，流程见 `.claude/skills/batch-import`。
 - 没有构建步骤。
 
 ## 测试
 
-- `python3 tests/test_app.py`：真浏览器 + 本地假 GitHub（`tests/fake_github.py`），天气和 DeepSeek 用假数据，不联网、不需要令牌。推送后 GitHub Actions（`.github/workflows/test.yml`）自动跑。**改了功能就在这里加对应的步骤**；只跑部分：`python3 tests/test_app.py 借出 出差`。
+- `python3 tests/test_app.py`：真浏览器 + 本地假 GitHub（`tests/fake_github.py`，可以同时开几个仓库：`serve({"owner/name": FakeRepo})`，顺手记账写的是编的 `test/finance-data`），天气和 DeepSeek 用假数据，不联网、不需要令牌。推送后 GitHub Actions（`.github/workflows/test.yml`）自动跑。**改了功能就在这里加对应的步骤**；只跑部分：`python3 tests/test_app.py 借出 出差`。
 - 网页通过 `localStorage['inventory-api-base']` 换 API 地址，导入脚本通过环境变量 `GITHUB_API_URL`，测试就是这样接到假 GitHub 的。
 - 摄像头扫码没有放进自动测试（要假摄像头视频），改了 `js/scan.js` 要手动测：Chromium 加 `--use-fake-device-for-media-stream --use-file-for-fake-video-capture=<y4m>`。
 - **绝不拿用户的真实数据仓库做写入测试。**需要连真 GitHub 时，复制数据建一个临时私有仓库，测完删掉。
