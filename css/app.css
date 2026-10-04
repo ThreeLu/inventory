@@ -329,3 +329,16 @@ nav .dot { position: absolute; top: 1px; right: -6px; width: 8px; height: 8px; b
 
 /* 详情卡片里「备注」标题和上面的字段拉开距离 */
 .card dl + h3 { margin-top: 16px; }
+
+/* 标签状态 */
+.label-state { font-size: 12px; font-weight: 600; padding: 0 7px; border-radius: 6px; line-height: 1.8; }
+.label-state.pending { background: color-mix(in srgb, #b07a12 16%, var(--card)); color: #b07a12; }
+.label-state.printed { background: var(--accent-soft); color: var(--accent); }
+.label-state.none { background: var(--chip); color: var(--muted); }
+@media (prefers-color-scheme: dark) { .label-state.pending { color: #e0b350; } }
+.switch-row { display: flex !important; align-items: center; gap: 10px; margin: 0 !important; font-size: 16px; }
+.switch-row input { width: 22px; height: 22px; min-height: 0; margin: 0 !important; accent-color: var(--accent); }
+.select-bar { display: flex; gap: 4px; margin: -6px 0 4px -6px; }
+
+/* 放在最后：比 .check-row、.photo-add 这类带 !important 的 display 更晚，hidden 才能生效 */
+[hidden] { display: none !important; }

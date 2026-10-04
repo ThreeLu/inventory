@@ -14,13 +14,26 @@ export const UNTAGGED_PREFIX = '000';
 const RESERVED_PREFIXES = [UNTAGGED_PREFIX, LOCATION_PREFIX];
 const DEFAULT_UNLABELED = ['衣服', '运动服', '鞋'];
 
-// 补齐旧数据缺的字段（类别编号、不贴标签的类别、提醒天数）。每次读到数据都调用。
+// 补齐旧数据缺的字段（类别编号、默认不贴标签的类别、提醒天数、标签状态）。每次读到数据都调用。
 export function migrate(data) {
   data.tagCodes ||= {};
   if (!data.unlabeledTags) data.unlabeledTags = DEFAULT_UNLABELED.filter((t) => data.tags.includes(t));
   data.reminderDays ||= 30;
   for (const tag of data.tags) if (!data.tagCodes[tag]) data.tagCodes[tag] = nextTagCode(data);
+  // 旧版用 labelPrinted 布尔值，现在是 label: 'none' | 'pending' | 'printed'
+  for (const x of [...data.items, ...data.locations]) {
+    if (!x.label) x.label = !x.assetId ? 'none' : x.labelPrinted === true ? 'printed' : 'pending';
+    delete x.labelPrinted;
+  }
   return data;
+}
+
+// 标签状态
+export const LABEL_TEXT = { none: '不贴', pending: '待打印', printed: '已打印' };
+
+export function setLabel(obj, state) {
+  obj.label = state;
+  if (state === 'printed') obj.labelPrintedAt = new Date().toISOString().slice(0, 10);
 }
 
 export function nextTagCode(data) {
@@ -36,9 +49,9 @@ export function nextTagCode(data) {
   throw new Error('类别编号用完了');
 }
 
-// 这些标签的物品不贴标签（衣服、鞋……），按第一个标签判断
-export function needsLabel(data, tags) {
-  return !(tags.length && data.unlabeledTags.includes(tags[0]));
+// 新建时「贴标签」开关的默认值：第一个标签是衣服、鞋这类就默认不贴。编号不受影响，每件都有。
+export function defaultLabel(data, tags) {
+  return tags.length && data.unlabeledTags.includes(tags[0]) ? 'none' : 'pending';
 }
 
 export function prefixForTags(data, tags) {
@@ -208,13 +221,15 @@ export class Store {
     return null;
   }
 
-  // 编号已定、标签还没打印的物品和位置
-  pendingLabels() {
+  // 某种标签状态的物品和位置（不含已归档的物品），按编号排序
+  labeled(state) {
     return [
-      ...this.data.locations.filter((l) => l.assetId && l.labelPrinted === false).map((obj) => ({ type: 'location', obj })),
-      ...this.data.items.filter((i) => i.assetId && i.labelPrinted === false && !i.archived).map((obj) => ({ type: 'item', obj })),
+      ...this.data.locations.filter((l) => l.assetId && l.label === state).map((obj) => ({ type: 'location', obj })),
+      ...this.data.items.filter((i) => i.assetId && i.label === state && !i.archived).map((obj) => ({ type: 'item', obj })),
     ].sort((a, b) => a.obj.assetId.localeCompare(b.obj.assetId));
   }
+
+  pendingLabels() { return this.labeled('pending'); }
 }
 
 // 修改数据时用的检查：编号不能和别的物品或位置重复

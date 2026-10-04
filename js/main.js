@@ -1,7 +1,7 @@
 import { GitHub } from './github.js';
 import {
   Store, normalizeAssetId, newId, assertAssetFree, ASSET_MAX, LOCATION_PREFIX,
-  needsLabel, prefixForTags, nextAssetInPrefix, nextTagCode, reminders,
+  defaultLabel, setLabel, LABEL_TEXT, prefixForTags, nextAssetInPrefix, nextTagCode, reminders,
 } from './store.js';
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
 import { makeXlsx } from './xlsx.js';
@@ -188,6 +188,7 @@ function itemRow(item, extra = null) {
       h('div', { class: 'row-title' }, item.name, item.quantity > 1 ? h('span', { class: 'qty' }, `×${item.quantity}`) : null),
       h('div', { class: 'row-meta' },
         assetChip(item.assetId),
+        item.label === 'pending' ? labelChip(item) : null,
         h('span', {}, store.shortName(item.location)),
         item.tags.length ? h('span', {}, item.tags.join('、')) : null,
         item.archived ? h('span', { class: 'badge' }, '已归档') : null,
@@ -197,6 +198,44 @@ function itemRow(item, extra = null) {
 // 清空元素再放入内容。和 replaceChildren 不同，这里会展开数组、跳过 null（经过 h()）
 function fill(el, ...children) {
   el.replaceChildren(...h('div', {}, ...children).childNodes);
+}
+
+// 标签状态小标记：不贴 / 待打印 / 已打印 10-04
+function labelChip(obj) {
+  if (!obj.assetId) return null;
+  const text = obj.label === 'printed' && obj.labelPrintedAt ? `已打印 ${obj.labelPrintedAt.slice(5)}` : LABEL_TEXT[obj.label] || '';
+  return h('span', { class: `label-state ${obj.label}` }, text);
+}
+
+// 改一件物品或一个位置的标签状态
+function changeLabel(type, id, state, message) {
+  return saving('正在保存…', () => store.save(message, (data) => {
+    const x = (type === 'item' ? data.items : data.locations).find((o) => o.id === id);
+    if (!x) throw new Error('找不到了，可能已经在别处被删除');
+    setLabel(x, state);
+    if (type === 'item') x.updatedAt = new Date().toISOString();
+  })).then(render).catch(() => {});
+}
+
+// 按当前状态给出的按钮：待打印 → 打印这一张 / 标记已打印；已打印 → 重新打印；不贴 → 要贴标签
+function labelButtons(type, obj) {
+  if (!obj.assetId) return [];
+  const base = type === 'item' ? `#/item/${obj.id}` : `#/place/${obj.id}`;
+  const name = type === 'item' ? obj.name : obj.name.split(' ')[0];
+  if (obj.label === 'pending') {
+    return [
+      h('a', { class: 'button secondary', href: `${base}/label` }, '打印这一张'),
+      h('button', { class: 'secondary', onclick: () => changeLabel(type, obj.id, 'printed', `标记已打印：${obj.assetId} ${name}`) }, '标记已打印'),
+    ];
+  }
+  if (obj.label === 'printed') {
+    return [h('button', {
+      class: 'secondary',
+      onclick: () => confirm(`重新打印 ${obj.assetId} 的标签？编号不变，新标签贴在旧标签的位置。`)
+        && changeLabel(type, obj.id, 'pending', `重新打印：${obj.assetId} ${name}`),
+    }, '重新打印')];
+  }
+  return [h('button', { class: 'secondary', onclick: () => changeLabel(type, obj.id, 'pending', `要贴标签：${obj.assetId} ${name}`) }, '要贴标签')];
 }
 
 function locationSelect(value, props = {}, placeholder = '选择位置…') {
@@ -218,7 +257,7 @@ function reminderRow(r) {
 
 // ---------- 物品列表 ----------
 
-const listState = { q: '', tag: '', loc: '', archived: false };
+const listState = { q: '', tag: '', loc: '', label: '', archived: false };
 
 function matches(item, words) {
   const text = [
@@ -241,6 +280,7 @@ function listView() {
       .filter((i) => listState.archived || !i.archived)
       .filter((i) => !listState.tag || i.tags.includes(listState.tag))
       .filter((i) => !inLoc || inLoc.has(i.location))
+      .filter((i) => !listState.label || i.label === listState.label)
       .filter((i) => matches(i, words))
       .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
     const total = items.reduce((s, i) => s + (Number(i.quantity) || 1), 0);
@@ -280,6 +320,9 @@ function listView() {
       h('select', { value: listState.tag, onchange: (e) => { listState.tag = e.target.value; update(); } },
         h('option', { value: '' }, '全部标签'), store.data.tags.map((t) => h('option', { value: t }, t))),
       locationSelect(listState.loc, { onchange: (e) => { listState.loc = e.target.value; update(); } }, '全部位置'),
+      h('select', { value: listState.label, onchange: (e) => { listState.label = e.target.value; update(); } },
+        h('option', { value: '' }, '标签状态'),
+        Object.entries(LABEL_TEXT).map(([k, v]) => h('option', { value: k }, v))),
       h('label', { class: 'check' },
         h('input', { type: 'checkbox', checked: listState.archived, onchange: (e) => { listState.archived = e.target.checked; update(); } }),
         '含已归档')),
@@ -358,8 +401,7 @@ function itemView(id) {
     gallery(item.photos),
     h('div', { class: 'card' },
       h('h1', { class: 'item-title' }, item.name, item.quantity > 1 ? h('span', { class: 'qty' }, `×${item.quantity}`) : null),
-      h('div', { class: 'row-meta' }, assetChip(item.assetId),
-        item.assetId && item.labelPrinted === false ? h('a', { class: 'badge', href: `#/item/${id}/label` }, '标签待打印') : null,
+      h('div', { class: 'row-meta' }, assetChip(item.assetId), labelChip(item),
         h('a', { href: `#/place/${item.location}` }, store.locationPath(item.location))),
       item.tags.length ? h('div', { class: 'chips' }, item.tags.map(tagChip)) : null,
       item.description ? h('p', { class: 'pre' }, item.description) : null,
@@ -378,7 +420,7 @@ function itemView(id) {
         lazyPhoto(gh, p.thumb, { onclick: () => openPhoto(p.file) })))) : null,
     h('div', { class: 'actions' },
       h('a', { class: 'button', href: `#/item/${id}/edit` }, '编辑'),
-      item.assetId ? h('a', { class: 'button secondary', href: `#/item/${id}/label` }, '标签') : null,
+      item.archived ? null : labelButtons('item', item),
       h('button', { class: 'secondary', onclick: copy }, '复制'),
       item.archived
         ? h('button', { class: 'secondary', onclick: unarchive }, '取消归档')
@@ -403,13 +445,19 @@ function formView(id, q = {}) {
     purchaseFrom: '', warrantyExpires: '', notes: '', archived: false,
   };
   const draft = existing ? structuredClone(existing)
-    : source ? { ...structuredClone(source), ...pick(blank, ['id', 'assetId', 'photos', 'receipts', 'notes', 'archived']) }
+    : source ? { ...structuredClone(source), ...pick(blank, ['id', 'assetId', 'photos', 'receipts', 'notes', 'archived']), label: undefined, labelPrintedAt: undefined }
       : blank;
   const added = { photos: [], receipts: [] }; // 新选的照片：{ file, url }
   const removed = [];
   let fieldRows = Object.entries(draft.fields || {}).map(([k, v]) => ({ k, v }));
-  // 编号是不是系统推荐的：推荐的可以随标签变化、保存时撞号自动顺延；手动填的、扫码带来的不动
+  // 编号是不是系统推荐的：推荐的可以随第一个标签变化、保存时撞号自动顺延；手动填的、扫码带来的、已有的不动
   let autoAsset = false;
+  let renumberConfirmed = false;
+  // 「贴标签」开关。编号和贴不贴标签无关：每件都有编号，开关只决定要不要进打印清单。
+  // 新建时跟着第一个标签的默认值走（衣服、鞋默认不贴），用户动过开关就不再自动改。
+  let wantLabel = existing ? existing.label !== 'none'
+    : source ? source.label !== 'none' : defaultLabel(store.data, draft.tags) !== 'none';
+  let labelTouched = Boolean(existing || source);
 
   const bind = (key, props = {}) => h(props.multiline ? 'textarea' : 'input', {
     ...props, multiline: undefined, value: draft[key] ?? '',
@@ -423,19 +471,25 @@ function formView(id, q = {}) {
   });
   const assetMsg = h('div', { class: 'hint' });
   const suggestBtn = h('button', { type: 'button', class: 'chip add', onclick: () => applySuggestion(true) }, '推荐编号');
+  const renumberBtn = h('button', { type: 'button', class: 'chip add', hidden: true, onclick: () => renumber() }, '按新类别重新编号');
   const checkAsset = (value) => {
     assetMsg.classList.remove('error');
+    renumberBtn.hidden = true;
     try {
       const norm = normalizeAssetId(value);
       const hit = norm && store.findByAsset(norm);
       if (hit && hit.obj.id !== itemId) throw new Error(`编号 ${norm} 已经被「${hit.obj.name}」用了`);
       const prefix = prefixForTags(store.data, draft.tags);
       if (!norm) {
-        assetMsg.textContent = !draft.tags.length ? '选好标签后会按类别自动给编号。'
-          : needsLabel(store.data, draft.tags) ? '没有编号就不打印标签。点「推荐编号」按类别自动给号。'
-            : `「${draft.tags[0]}」默认不贴标签，所以不给编号。`;
+        assetMsg.textContent = draft.tags.length ? '保存时会按类别自动编号。' : '选好标签后会按类别自动编号（不选标签就用 000 开头）。';
+      } else if (autoAsset) {
+        assetMsg.textContent = `按类别自动编号（${draft.tags[0] || '无标签'} ${prefix}-xxx）`;
+      } else if (existing && draft.tags.length && !norm.startsWith(`${prefix}-`)) {
+        // 编号是建档时的类别，之后改了标签不会自动换号（贴好的标签不能随便换）
+        assetMsg.textContent = `编号是建档时的类别，和现在第一个标签「${draft.tags[0]}」（${prefix}）不一致。`;
+        renumberBtn.hidden = false;
       } else {
-        assetMsg.textContent = autoAsset ? `按类别自动编号（${draft.tags[0] || '无标签'} ${prefix}-xxx）` : `编号：${norm}`;
+        assetMsg.textContent = `编号：${norm}`;
       }
       suggestBtn.hidden = Boolean(norm);
       return norm;
@@ -446,9 +500,9 @@ function formView(id, q = {}) {
       return undefined;
     }
   };
-  // force：用户点了「推荐编号」，即使是不贴标签的类别也给号
+  // force：用户点了按钮，没选标签也按 000 给号
   const applySuggestion = (force = false) => {
-    if (!force && (!draft.tags.length || !needsLabel(store.data, draft.tags))) {
+    if (!force && !draft.tags.length) {
       assetInput.value = '';
     } else {
       try {
@@ -458,12 +512,31 @@ function formView(id, q = {}) {
     autoAsset = true;
     checkAsset(assetInput.value);
   };
+  const renumber = () => {
+    if (existing?.label === 'printed' && !confirm('这件已经打印过标签。重新编号后，旧标签就扫不出它了，需要重新打印。继续？')) return;
+    renumberConfirmed = true;
+    applySuggestion(true);
+  };
   if (q.asset) {
     assetInput.value = safeAsset(q.asset) || '';
   } else if (!existing) {
     applySuggestion();
   }
   checkAsset(assetInput.value);
+
+  // ---- 贴标签开关 ----
+  const labelSwitch = h('input', {
+    type: 'checkbox', checked: wantLabel,
+    onchange: (e) => { wantLabel = e.target.checked; labelTouched = true; drawLabelStatus(); },
+  });
+  const labelStatus = h('div', { class: 'hint' });
+  const drawLabelStatus = () => {
+    labelStatus.textContent = !wantLabel
+      ? (existing?.label === 'printed' ? '不再打印。已经贴着的标签照样能扫。' : '不进打印清单，编号照常保留。以后想贴随时打开。')
+      : existing?.label === 'printed' ? `已打印（${existing.labelPrintedAt || '日期未知'}）。要重打，在物品页点「重新打印」。`
+        : '保存后进入「待打印」。';
+  };
+  drawLabelStatus();
 
   // ---- 照片 ----
   const photoSection = (kind, title) => {
@@ -500,9 +573,14 @@ function formView(id, q = {}) {
         draft.tags = draft.tags.includes(t) ? draft.tags.filter((x) => x !== t) : [...draft.tags, t];
         drawTags();
         drawFields();
-        // 第一个标签决定编号的类别；推荐的编号跟着变，手动填的不动
-        if (autoAsset || !assetInput.value) applySuggestion();
+        // 第一个标签决定编号的类别；推荐的编号跟着变，手动填的、已有的不动
+        if (autoAsset || (!existing && !assetInput.value)) applySuggestion();
         else checkAsset(assetInput.value);
+        if (!labelTouched) {
+          wantLabel = defaultLabel(store.data, draft.tags) !== 'none';
+          labelSwitch.checked = wantLabel;
+          drawLabelStatus();
+        }
       },
     }, t)));
   };
@@ -528,6 +606,8 @@ function formView(id, q = {}) {
     if (!draft.location) return toast('请选择位置', 'error');
     const asset = checkAsset(assetInput.value);
     if (asset === undefined) return toast(assetMsg.textContent, 'error');
+    if (existing?.label === 'printed' && existing.assetId && asset !== existing.assetId && !renumberConfirmed
+      && !confirm(`编号从 ${existing.assetId} 改成 ${asset || '自动编号'}，已经贴着的旧标签就扫不出这件了，需要重新打印。继续？`)) return;
     draft.assetId = asset;
     draft.quantity = Math.max(1, Number(draft.quantity) || 1);
     draft.purchasePrice = draft.purchasePrice === '' || draft.purchasePrice == null ? null : Number(draft.purchasePrice);
@@ -535,9 +615,10 @@ function formView(id, q = {}) {
     for (const k of ['manufacturer', 'modelNumber', 'serialNumber', 'purchaseFrom', 'description', 'notes']) {
       draft[k] = (draft[k] || '').trim();
     }
-    // 编号变了（或新给了编号）就要重新打印标签
+    // 标签状态：不贴 → none；要贴时，编号没变就保持原状态（已打印的还是已打印），否则进待打印
     const assetChanged = !existing || existing.assetId !== draft.assetId;
-    const labelPrinted = draft.assetId ? (assetChanged ? false : existing.labelPrinted) : undefined;
+    const label = !wantLabel ? 'none'
+      : existing && !assetChanged && existing.label !== 'none' ? existing.label : 'pending';
 
     let savedAsset;
     await saving('正在处理照片…', async (b) => {
@@ -558,13 +639,14 @@ function formView(id, q = {}) {
       b.set(uploads.length ? '正在上传…' : '正在保存…');
       const now = new Date().toISOString();
       const record = {
-        ...draft, labelPrinted,
+        ...draft, label,
         photos: [...draft.photos, ...fresh.photos], receipts: [...draft.receipts, ...fresh.receipts],
       };
-      if (record.labelPrinted === undefined) delete record.labelPrinted;
+      if (!record.labelPrintedAt) delete record.labelPrintedAt;
       savedAsset = await store.save(`${existing ? '修改' : '新建'}：${draft.name}`, (data) => {
-        // 推荐的编号如果刚好被别的设备占了，自动顺延到下一个空号
-        if (autoAsset && record.assetId && data.items.concat(data.locations).some((x) => x.assetId === record.assetId && x.id !== itemId)) {
+        // 每件都要有编号：没填就按类别给；推荐的编号刚好被别的设备占了，就顺延到下一个空号
+        const taken = (a) => data.items.concat(data.locations).some((x) => x.assetId === a && x.id !== itemId);
+        if (!record.assetId || (autoAsset && taken(record.assetId))) {
           record.assetId = nextAssetInPrefix(data, prefixForTags(data, record.tags));
         }
         assertAssetFree(data, record.assetId, itemId);
@@ -578,7 +660,7 @@ function formView(id, q = {}) {
         return record.assetId;
       }, { uploads, removes: removed.flatMap((p) => [p.file, p.thumb]) });
     });
-    toast(savedAsset && savedAsset !== draft.assetId ? `已保存（编号改为 ${savedAsset}）` : '已保存');
+    toast(savedAsset !== draft.assetId ? `已保存（编号 ${savedAsset}）` : '已保存');
     if (andNext) {
       go(`#/new?loc=${draft.location}&tags=${encodeURIComponent(draft.tags.join(','))}&t=${Date.now()}`, true);
       window.scrollTo(0, 0);
@@ -593,7 +675,8 @@ function formView(id, q = {}) {
     h('label', {}, '名称', bind('name', { placeholder: '例如 黑色羽绒服（优衣库）', required: true })),
     h('label', {}, '位置', locationSelect(draft.location, { onchange: (e) => { draft.location = e.target.value; } })),
     h('div', { class: 'label' }, '标签', h('span', { class: 'hint inline' }, '第一个选的标签决定编号类别'), tagBox),
-    h('div', { class: 'label' }, '编号', h('div', { class: 'asset-row' }, assetInput, suggestBtn), assetMsg),
+    h('div', { class: 'label' }, '编号', h('div', { class: 'asset-row' }, assetInput, suggestBtn), renumberBtn, assetMsg),
+    h('div', { class: 'label' }, h('label', { class: 'switch-row' }, labelSwitch, '贴标签'), labelStatus),
     h('label', {}, '数量', bind('quantity', { type: 'number', min: 1, inputmode: 'numeric' })),
     h('div', { class: 'label' }, '其他信息', fieldBox),
     h('label', {}, '描述', bind('description', { multiline: true, rows: 2 })),
@@ -777,14 +860,15 @@ function placeView(id) {
   const items = store.itemsIn(id).sort((a, b) => a.name.localeCompare(b.name, 'zh'));
   const setAsset = async () => {
     const suggestion = loc.assetId || nextAssetInPrefix(store.data, LOCATION_PREFIX);
-    const value = prompt('这个位置的标签编号（柜子统一用 010 开头；留空表示不贴标签）：', suggestion);
+    const value = prompt('这个位置的编号（柜子统一用 010 开头；留空表示不编号）：', suggestion);
     if (value === null) return;
     let asset;
     try { asset = normalizeAssetId(value); } catch (e) { return toast(e.message, 'error'); }
+    if (loc.label === 'printed' && asset !== loc.assetId && !confirm('这个柜子的标签已经打印过，改编号后旧标签就扫不出它了，需要重新打印。继续？')) return;
     await saving('正在保存…', () => store.save(`设置位置编号：${loc.name}`, (data) => {
       assertAssetFree(data, asset, id);
       const l = data.locations.find((x) => x.id === id);
-      if (l.assetId !== asset) l.labelPrinted = asset ? false : undefined;
+      if (l.assetId !== asset) l.label = asset ? 'pending' : 'none';
       l.assetId = asset;
     })).catch(() => {});
     render();
@@ -792,9 +876,10 @@ function placeView(id) {
   return h('div', {},
     h('p', { class: 'muted small' }, store.locationPath(loc.parent) || '　'),
     header(loc.name),
-    h('div', { class: 'row-meta' }, assetChip(loc.assetId),
-      h('button', { class: 'link', onclick: () => setAsset() }, loc.assetId ? '修改编号' : '给柜子编号'),
-      loc.assetId ? h('a', { href: `#/place/${id}/label` }, '标签') : null),
+    h('div', { class: 'row-meta' }, assetChip(loc.assetId), labelChip(loc),
+      h('button', { class: 'link', onclick: () => setAsset() }, loc.assetId ? '修改编号' : '给柜子编号')),
+    loc.assetId ? h('div', { class: 'actions' }, labelButtons('location', loc),
+      loc.label !== 'none' ? h('button', { class: 'link', onclick: () => changeLabel('location', id, 'none', `不贴标签：${loc.name}`) }, '不贴了') : null) : null,
     store.children(id).length ? h('div', { class: 'chips' }, store.children(id).map((c) =>
       h('a', { class: 'chip', href: `#/place/${c.id}` }, c.name.split(' ')[0]))) : null,
     h('p', { class: 'muted' }, `${items.length} 件`),
@@ -806,6 +891,7 @@ function placeView(id) {
 
 function moreView() {
   const pending = store.pendingLabels().length;
+  const printed = store.labeled('printed').length;
   const due = reminders(store.data).length;
   const entry = (href, title, desc, badge) => h('a', { class: 'row', href },
     h('div', { class: 'row-main' }, h('div', { class: 'row-title' }, title), h('div', { class: 'row-meta' }, desc)),
@@ -813,7 +899,7 @@ function moreView() {
   return h('div', {},
     header('更多'),
     h('div', { class: 'list' },
-      entry('#/labels', '待打印标签', '导出 Excel，用汉码批量打印', pending || null),
+      entry('#/labels', '标签', `待打印 ${pending} 张 · 已打印 ${printed} 张`, pending || null),
       entry('#/reminders', '到期提醒', `保质期、保修 ${store.data.reminderDays} 天内到期的东西`, due || null),
       entry('#/stats', '统计', '每类、每个柜子有多少东西，值多少钱'),
       entry('#/manage', '管理位置和标签', '新建、改名、类别编号、哪些类别不贴标签'),
@@ -822,53 +908,92 @@ function moreView() {
 
 // ---------- 标签打印 ----------
 
+const labelTab = { tab: 'pending', q: '' };
+
 function labelsView() {
-  const pending = store.pendingLabels();
-  const selected = new Set(pending.map((p) => p.obj.id));
+  const tab = labelTab.tab;
   const nameOf = (p) => (p.type === 'item' ? p.obj.name : p.obj.name.split(' ')[0]);
+  const list = store.labeled(tab);
+  // 待打印默认全选；已打印默认都不选（勾上要重打的）
+  const selected = new Set(tab === 'pending' ? list.map((p) => p.obj.id) : []);
+  const chosen = () => list.filter((p) => selected.has(p.obj.id));
 
   const download = () => {
-    const rows = pending.filter((p) => selected.has(p.obj.id));
+    const rows = chosen();
     if (!rows.length) return toast('没有选中的标签', 'error');
     const blob = makeXlsx([['编号', '名称', '二维码'], ...rows.map((p) => [p.obj.assetId, nameOf(p), `${SITE_URL}?a=${p.obj.assetId}`])], '标签');
     const a = h('a', { href: URL.createObjectURL(blob), download: `标签_${today()}_${rows.length}张.xlsx` });
     document.body.append(a);
     a.click();
     a.remove();
+    toast('已下载。打印、贴好后，回来点「标记为已打印」');
   };
-  const markPrinted = async () => {
-    const ids = new Set(pending.filter((p) => selected.has(p.obj.id)).map((p) => p.obj.id));
+  const setState = async (state, question, message) => {
+    const ids = new Set(chosen().map((p) => p.obj.id));
     if (!ids.size) return toast('没有选中的标签', 'error');
-    if (!confirm(`把选中的 ${ids.size} 张标记为已打印？`)) return;
-    await saving('正在保存…', () => store.save(`标记已打印：${ids.size} 张标签`, (data) => {
-      for (const x of [...data.items, ...data.locations]) if (ids.has(x.id)) x.labelPrinted = true;
+    if (!confirm(question(ids.size))) return;
+    await saving('正在保存…', () => store.save(message(ids.size), (data) => {
+      for (const x of [...data.items, ...data.locations]) if (ids.has(x.id)) setLabel(x, state);
     })).catch(() => {});
     render();
   };
+  const tabBtn = (key, text) => h('button', {
+    type: 'button', class: `seg${tab === key ? ' on' : ''}`,
+    onclick: () => { labelTab.tab = key; render(); },
+  }, `${text}（${store.labeled(key).length}）`);
+
+  const rows = h('div', { class: 'list compact' }, list.map((p) => h('label', { class: 'check-row', 'data-text': `${p.obj.assetId} ${nameOf(p)}`.toLowerCase() },
+    h('input', {
+      type: 'checkbox', checked: selected.has(p.obj.id),
+      onchange: (e) => { if (e.target.checked) selected.add(p.obj.id); else selected.delete(p.obj.id); },
+    }),
+    h('span', { class: 'asset' }, p.obj.assetId),
+    h('a', { class: 'grow', href: p.type === 'item' ? `#/item/${p.obj.id}` : `#/place/${p.obj.id}` }, nameOf(p)),
+    tab === 'printed' && p.obj.labelPrintedAt ? h('span', { class: 'muted small' }, p.obj.labelPrintedAt.slice(5)) : null)));
+  // 全选只作用于搜索后看得见的行
+  const selectAll = (on) => {
+    rows.querySelectorAll('.check-row').forEach((row, i) => {
+      if (row.hidden) return;
+      row.querySelector('input').checked = on;
+      if (on) selected.add(list[i].obj.id); else selected.delete(list[i].obj.id);
+    });
+  };
+  const filter = () => {
+    const w = labelTab.q.trim().toLowerCase();
+    for (const row of rows.querySelectorAll('.check-row')) row.hidden = Boolean(w) && !row.dataset.text.includes(w);
+  };
+  if (tab === 'printed') filter();
 
   return h('div', {},
-    header('待打印标签'),
-    pending.length ? h('div', { class: 'card' },
-      h('div', { class: 'list compact' }, pending.map((p) => h('label', { class: 'check-row' },
-        h('input', {
-          type: 'checkbox', checked: true,
-          onchange: (e) => { if (e.target.checked) selected.add(p.obj.id); else selected.delete(p.obj.id); },
-        }),
-        h('span', { class: 'asset' }, p.obj.assetId),
-        h('span', { class: 'grow' }, nameOf(p))))),
-      h('div', { class: 'actions' },
-        h('button', { onclick: download }, '下载 Excel'),
-        h('button', { class: 'secondary', onclick: markPrinted }, '标记为已打印')))
-      : h('div', { class: 'card' }, h('p', {}, '没有待打印的标签。新建物品时给了编号，它就会出现在这里。')),
-    h('div', { class: 'card' },
+    header('标签'),
+    h('div', { class: 'segmented' }, tabBtn('pending', '待打印'), tabBtn('printed', '已打印')),
+    tab === 'printed' ? h('input', {
+      type: 'search', class: 'search', placeholder: '搜索编号或名称', value: labelTab.q,
+      oninput: (e) => { labelTab.q = e.target.value; filter(); },
+    }) : null,
+    list.length ? h('div', { class: 'card' },
+      h('div', { class: 'select-bar' },
+        h('button', { class: 'link', onclick: () => selectAll(true) }, '全选'),
+        h('button', { class: 'link', onclick: () => selectAll(false) }, '全不选')),
+      rows,
+      tab === 'pending'
+        ? h('div', { class: 'actions' },
+          h('button', { onclick: download }, '下载 Excel'),
+          h('button', { class: 'secondary', onclick: () => setState('printed', (n) => `把选中的 ${n} 张标记为已打印？\n确认已经打好、贴好了再点。`, (n) => `标记已打印：${n} 张标签`) }, '标记为已打印'))
+        : h('div', { class: 'actions' },
+          h('button', { class: 'secondary', onclick: () => setState('pending', (n) => `把选中的 ${n} 张放回「待打印」重新打印？编号不变。`, (n) => `重新打印：${n} 张标签`) }, '重新打印选中的')))
+      : h('div', { class: 'card' }, h('p', {}, tab === 'pending'
+        ? '没有待打印的标签。新建时开着「贴标签」的东西会出现在这里。'
+        : '还没有打印过标签。')),
+    tab === 'pending' ? h('div', { class: 'card' },
       h('h3', {}, '在汉码 App 里批量打印（汉印 M1，40×30mm）'),
       h('ol', {},
-        h('li', {}, '下载 Excel，发到手机（微信文件传输助手等）。'),
+        h('li', {}, '勾选要打的，下载 Excel，发到手机（微信文件传输助手等）。'),
         h('li', {}, '汉码里新建 40×30mm 标签：加一个二维码，内容绑定「二维码」列，放在左边、尽量大。'),
-        h('li', {}, '加两个文本，分别绑定「编号」和「名称」列，放在右边。'),
+        h('li', {}, '加两个文本，分别绑定「编号」和「名称」列，放在右边。模板存好，以后直接用。'),
         h('li', {}, '导入 Excel，批量打印，按名称贴到对应的东西上。'),
-        h('li', {}, '贴好后回到这里点「标记为已打印」。')),
-      h('p', { class: 'muted small' }, '只打一张：在物品页点「标签」，保存图片后用汉码的图片打印。')));
+        h('li', {}, '贴好后回到这里，勾选、点「标记为已打印」。下载 Excel 不会自动标记，防止打印失败漏贴。')),
+      h('p', { class: 'muted small' }, '只打一张：在物品页点「打印这一张」，保存图片后用汉码的图片打印。')) : null);
 }
 
 function drawLabel(assetId, name) {
@@ -910,21 +1035,16 @@ function labelView(type, id) {
   if (!obj?.assetId) return notFound('没有编号，无法生成标签。');
   const canvas = drawLabel(obj.assetId, type === 'item' ? obj.name : obj.name.split(' ')[0]);
   const img = h('img', { src: canvas.toDataURL('image/png'), class: 'label-img', alt: `标签 ${obj.assetId}` });
-  const mark = async () => {
-    await saving('正在保存…', () => store.save(`标记已打印：${obj.assetId}`, (data) => {
-      const x = (type === 'item' ? data.items : data.locations).find((o) => o.id === id);
-      if (x) x.labelPrinted = true;
-    })).catch(() => {});
-    toast('已标记');
-    history.back();
-  };
   return h('div', {},
     header('标签'),
     h('div', { class: 'card center' }, img,
+      h('p', {}, assetChip(obj.assetId), ' ', labelChip(obj)),
       h('p', { class: 'muted small' }, '40×30mm。手机上长按图片保存到相册，再在汉码 App 里用「图片打印」。'),
       h('div', { class: 'actions center-row' },
         h('a', { class: 'button secondary', href: img.src, download: `label_${obj.assetId}.png` }, '下载图片'),
-        obj.labelPrinted === false ? h('button', { onclick: mark }, '已打印，标记一下') : null)));
+        obj.label !== 'printed'
+          ? h('button', { onclick: () => changeLabel(type, id, 'printed', `标记已打印：${obj.assetId}`) }, '打好了，标记已打印')
+          : null)));
 }
 
 // ---------- 到期提醒 ----------
@@ -978,7 +1098,8 @@ function statsView() {
       h('div', { class: 'stat' }, h('div', { class: 'stat-num' }, items.length), h('div', { class: 'stat-label' }, '件物品')),
       h('div', { class: 'stat' }, h('div', { class: 'stat-num' }, items.reduce((s, i) => s + qty(i), 0)), h('div', { class: 'stat-label' }, '个（含数量）')),
       h('div', { class: 'stat' }, h('div', { class: 'stat-num' }, money(value(items))), h('div', { class: 'stat-label' }, '记录的总价值')),
-      h('div', { class: 'stat' }, h('div', { class: 'stat-num' }, items.filter((i) => i.assetId).length), h('div', { class: 'stat-label' }, '件有编号'))),
+      h('div', { class: 'stat' }, h('div', { class: 'stat-num' }, `${items.filter((i) => i.label === 'printed').length} / ${items.filter((i) => i.label !== 'none').length}`),
+        h('div', { class: 'stat-label' }, `标签已贴 / 要贴（待打印 ${items.filter((i) => i.label === 'pending').length}）`))),
     h('div', { class: 'card' }, h('h3', {}, '按类别（第一个标签）'), byTag.length ? bars(byTag) : h('p', { class: 'muted' }, '还没有物品'),
       untagged ? h('p', { class: 'muted small' }, `另有 ${untagged} 件没有标签`) : null),
     h('div', { class: 'card' }, h('h3', {}, '按位置'), byPlace.length ? bars(byPlace) : h('p', { class: 'muted' }, '还没有物品')),
