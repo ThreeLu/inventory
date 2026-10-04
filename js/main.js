@@ -1,7 +1,7 @@
 import { GitHub } from './github.js';
 import {
   Store, normalizeAssetId, newId, assertAssetFree, ASSET_MAX, LOCATION_PREFIX,
-  defaultLabel, setLabel, LABEL_TEXT, prefixForTags, nextAssetInPrefix, nextTagCode, reminders,
+  defaultLabel, setLabel, LABEL_TEXT, prefixForTags, defaultConsumable, isDepleted, ARCHIVE_REASONS, nextAssetInPrefix, nextTagCode, reminders,
 } from './store.js';
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
 import { makeXlsx } from './xlsx.js';
@@ -98,12 +98,13 @@ const routes = [
   [/^\/more$/, () => moreView()],
   [/^\/labels$/, () => labelsView()],
   [/^\/reminders$/, () => remindersView()],
+  [/^\/restock$/, () => restockView()],
   [/^\/stats$/, () => statsView()],
   [/^\/manage$/, () => manageView()],
   [/^\/settings$/, () => settingsView()],
 ];
 
-const NAV_GROUPS = { '/more': ['/more', '/labels', '/reminders', '/stats', '/manage', '/settings'] };
+const NAV_GROUPS = { '/more': ['/more', '/labels', '/restock', '/reminders', '/stats', '/manage', '/settings'] };
 
 function render() {
   if (cleanup) { cleanup(); cleanup = null; }
@@ -191,13 +192,38 @@ function itemRow(item, extra = null) {
         item.label === 'pending' ? labelChip(item) : null,
         h('span', {}, store.shortName(item.location)),
         item.tags.length ? h('span', {}, item.tags.join('、')) : null,
-        item.archived ? h('span', { class: 'badge' }, '已归档') : null,
+        isDepleted(item) && !item.archived ? h('span', { class: 'badge warn' }, '已用完') : null,
+        item.archived ? h('span', { class: 'badge' }, item.archiveReason ? `已归档 · ${item.archiveReason}` : '已归档') : null,
         extra)));
 }
 
 // 清空元素再放入内容。和 replaceChildren 不同，这里会展开数组、跳过 null（经过 h()）
 function fill(el, ...children) {
   el.replaceChildren(...h('div', {}, ...children).childNodes);
+}
+
+// 底部弹出的小表单。onConfirm 返回 false 表示不关闭（比如校验没过）
+function openSheet({ title, body, confirmText = '确定', onConfirm }) {
+  const close = () => overlay.remove();
+  const overlay = h('div', { class: 'sheet-overlay', onclick: (e) => { if (e.target === overlay) close(); } },
+    h('div', { class: 'sheet' },
+      h('h3', {}, title),
+      body,
+      h('div', { class: 'actions' },
+        h('button', { onclick: async () => { if ((await onConfirm()) !== false) close(); } }, confirmText),
+        h('button', { class: 'secondary', onclick: close }, '取消'))));
+  document.body.append(overlay);
+  overlay.querySelector('input, textarea')?.focus();
+}
+
+function chipChoice(options, initial) {
+  let value = initial;
+  const box = h('div', { class: 'chips' });
+  const draw = () => box.replaceChildren(...options.map((o) => h('button', {
+    type: 'button', class: `chip${o === value ? ' on' : ''}`, onclick: () => { value = o; draw(); },
+  }, o)));
+  draw();
+  return { el: box, get: () => value };
 }
 
 // 标签状态小标记：不贴 / 待打印 / 已打印 10-04
@@ -305,13 +331,17 @@ function listView() {
     h('strong', {}, `${due.length} 件需要注意`),
     h('span', { class: 'muted small' }, due.slice(0, 3).map((r) => `${r.item.name}（${r.kind}${daysText(r.days)}）`).join('，'),
       due.length > 3 ? '……' : '')) : null;
+  const depleted = store.data.items.filter((i) => isDepleted(i) && !i.archived);
+  const restockCard = depleted.length ? h('a', { class: 'card notice', href: '#/restock' },
+    h('strong', {}, `${depleted.length} 件用完了，需要补货`),
+    h('span', { class: 'muted small' }, depleted.slice(0, 4).map((i) => i.name).join('，'), depleted.length > 4 ? '……' : '')) : null;
   const pending = store.pendingLabels().length;
   const labelCard = pending ? h('a', { class: 'card notice', href: '#/labels' },
     h('strong', {}, `${pending} 张标签待打印`), h('span', { class: 'muted small' }, '打印后贴上，再标记为已打印')) : null;
 
   const page = h('div', {},
     header('物品'),
-    dueCard, labelCard,
+    dueCard, restockCard, labelCard,
     h('input', {
       type: 'search', placeholder: '搜索名称、编号、品牌……', value: listState.q, class: 'search',
       oninput: (e) => { listState.q = e.target.value; update(); },
@@ -371,20 +401,43 @@ function itemView(id) {
     it.updatedAt = new Date().toISOString();
   })).then(render).catch(() => {});
 
+  const note = (it, text) => { it.notes = [it.notes, `${today()} ${text}`].filter(Boolean).join('\n'); };
+
+  // 归档：点选原因，可补充说明。编号保留、永不复用
   const archive = () => {
-    const reason = prompt('归档原因（丢失、送人、卖掉、扔掉、吃完……），会记在备注里：');
-    if (reason === null) return;
-    update(`归档：${item.name}`, (it) => {
-      it.archived = true;
-      it.notes = [it.notes, `${today()} 归档：${reason || '未写原因'}`].filter(Boolean).join('\n');
+    const reason = chipChoice(ARCHIVE_REASONS, isDepleted(item) ? '用完不再买' : '扔掉');
+    const extra = h('input', { placeholder: '补充说明（选填），比如送给了谁、在哪丢的' });
+    openSheet({
+      title: `归档「${item.name}」`,
+      body: h('div', {}, reason.el, extra,
+        h('p', { class: 'muted small' }, `编号 ${item.assetId || ''} 会保留，不会再分给别的东西。以后可以取消归档。`)),
+      confirmText: '归档',
+      onConfirm: () => update(`归档（${reason.get()}）：${item.name}`, (it) => {
+        it.archived = true;
+        it.archiveReason = reason.get();
+        it.archivedAt = today();
+        note(it, `归档：${reason.get()}${extra.value.trim() ? `，${extra.value.trim()}` : ''}`);
+      }),
     });
   };
   const unarchive = () => update(`取消归档：${item.name}`, (it) => {
     it.archived = false;
-    it.notes = [it.notes, `${today()} 取消归档`].filter(Boolean).join('\n');
+    delete it.archiveReason;
+    delete it.archivedAt;
+    note(it, '取消归档');
   });
+
+  // 消耗品：用掉一个 / 用完了 / 补货
+  const useOne = () => update(`用掉一个：${item.name}`, (it) => {
+    it.quantity = Math.max(0, (Number(it.quantity) || 1) - 1);
+    if (it.quantity === 0) note(it, '用完');
+  });
+  const useUp = () => confirm(`「${item.name}」用完了？\n会放进「需要补货」清单，编号和记录都保留。`)
+    && update(`用完：${item.name}`, (it) => { it.quantity = 0; note(it, '用完'); });
+  const restock = () => openRestock(item);
+
   const remove = async () => {
-    if (!confirm(`彻底删除「${item.name}」？\n\n丢失、送人、扔掉的东西建议用「归档」，记录会保留。`)) return;
+    if (!confirm(`彻底删除「${item.name}」？\n\n删除只用于录错了、重复录入。扔掉、送人、用完不再买请用「归档」，记录会保留。\n（删除后编号也不会再分给别的东西）`)) return;
     const files = [...(item.photos || []), ...(item.receipts || [])].flatMap((p) => [p.file, p.thumb]);
     try {
       await saving('正在删除…', () => store.save(`删除：${item.name}`, (data) => {
@@ -396,12 +449,14 @@ function itemView(id) {
   const copy = () => go(`#/new?from=${id}`);
 
   return h('div', {},
-    item.archived ? h('div', { class: 'banner' }, '这件物品已归档') : null,
+    item.archived ? h('div', { class: 'banner' }, `已归档${item.archiveReason ? `：${item.archiveReason}` : ''}${item.archivedAt ? `（${item.archivedAt}）` : ''}`) : null,
+    isDepleted(item) && !item.archived ? h('div', { class: 'banner warn' }, '已用完，等补货') : null,
     due.map((r) => h('div', { class: `banner ${r.days < 0 ? 'warn' : 'soon'}` }, `${r.kind}：${r.date}，${daysText(r.days)}`)),
     gallery(item.photos),
     h('div', { class: 'card' },
       h('h1', { class: 'item-title' }, item.name, item.quantity > 1 ? h('span', { class: 'qty' }, `×${item.quantity}`) : null),
       h('div', { class: 'row-meta' }, assetChip(item.assetId), labelChip(item),
+        item.consumable ? h('span', { class: 'badge' }, '消耗品') : null,
         h('a', { href: `#/place/${item.location}` }, store.locationPath(item.location))),
       item.tags.length ? h('div', { class: 'chips' }, item.tags.map(tagChip)) : null,
       item.description ? h('p', { class: 'pre' }, item.description) : null,
@@ -420,6 +475,11 @@ function itemView(id) {
         lazyPhoto(gh, p.thumb, { onclick: () => openPhoto(p.file) })))) : null,
     h('div', { class: 'actions' },
       h('a', { class: 'button', href: `#/item/${id}/edit` }, '编辑'),
+      item.consumable && !item.archived ? [
+        item.quantity > 1 ? h('button', { class: 'secondary', onclick: useOne }, '用掉一个') : null,
+        isDepleted(item) ? null : h('button', { class: 'secondary', onclick: useUp }, '用完了'),
+        h('button', { class: isDepleted(item) ? '' : 'secondary', onclick: restock }, '补货'),
+      ] : null,
       item.archived ? null : labelButtons('item', item),
       h('button', { class: 'secondary', onclick: copy }, '复制'),
       item.archived
@@ -428,6 +488,38 @@ function itemView(id) {
       h('button', { class: 'danger', onclick: () => remove() }, '删除')),
     h('p', { class: 'muted small center' },
       `创建于 ${(item.createdAt || '').slice(0, 10)} · 更新于 ${(item.updatedAt || '').slice(0, 10)}`));
+}
+
+// 补货：填新数量、新保质期；新包装要贴标签的话，顺手放回待打印（编号不变）
+function openRestock(item) {
+  const qty = h('input', { type: 'number', min: 1, inputmode: 'numeric', value: Math.max(1, Number(item.quantity) || 1) });
+  const hasExpiry = item.fields?.['保质期'] !== undefined || item.tags.some((t) => (store.data.fieldPresets?.[t] || []).includes('保质期'));
+  const expiry = h('input', { placeholder: '例如 2028-05 或 2028-05-09', value: '' });
+  const reprint = h('input', { type: 'checkbox', checked: item.label === 'printed' });
+  openSheet({
+    title: `补货「${item.name}」`,
+    body: h('div', { class: 'form' },
+      h('label', {}, '现在有多少', qty),
+      hasExpiry ? h('label', {}, `新的保质期${item.fields?.['保质期'] ? `（原来 ${item.fields['保质期']}）` : ''}`, expiry) : null,
+      item.label !== 'none' ? h('label', { class: 'switch-row' }, reprint, '新包装要重新贴标签（编号不变）') : null),
+    confirmText: '补货',
+    onConfirm: async () => {
+      const n = Number(qty.value);
+      if (!Number.isFinite(n) || n < 1) { toast('数量至少是 1', 'error'); return false; }
+      const exp = expiry.value.trim();
+      await saving('正在保存…', () => store.save(`补货：${item.name} ×${n}`, (data) => {
+        const it = data.items.find((i) => i.id === item.id);
+        if (!it) throw new Error('这件物品已经在别处被删除了');
+        it.quantity = n;
+        if (exp) it.fields = { ...it.fields, 保质期: exp };
+        if (reprint.checked && it.label !== 'none') setLabel(it, 'pending');
+        it.purchaseDate = today();
+        it.updatedAt = new Date().toISOString();
+        it.notes = [it.notes, `${today()} 补货 ×${n}${exp ? `，保质期 ${exp}` : ''}`].filter(Boolean).join('\n');
+      })).catch(() => {});
+      render();
+    },
+  });
 }
 
 // ---------- 新建 / 编辑 ----------
@@ -458,6 +550,9 @@ function formView(id, q = {}) {
   let wantLabel = existing ? existing.label !== 'none'
     : source ? source.label !== 'none' : defaultLabel(store.data, draft.tags) !== 'none';
   let labelTouched = Boolean(existing || source);
+  // 「消耗品」开关：同样按第一个标签给默认值（零食、药品、洗漱、清洁），可以单件改
+  let wantConsumable = existing || source ? Boolean(draft.consumable) : defaultConsumable(store.data, draft.tags);
+  let consumableTouched = Boolean(existing || source);
 
   const bind = (key, props = {}) => h(props.multiline ? 'textarea' : 'input', {
     ...props, multiline: undefined, value: draft[key] ?? '',
@@ -538,6 +633,11 @@ function formView(id, q = {}) {
   };
   drawLabelStatus();
 
+  const consumableSwitch = h('input', {
+    type: 'checkbox', checked: wantConsumable,
+    onchange: (e) => { wantConsumable = e.target.checked; consumableTouched = true; },
+  });
+
   // ---- 照片 ----
   const photoSection = (kind, title) => {
     const grid = h('div', { class: 'photo-grid' });
@@ -581,6 +681,10 @@ function formView(id, q = {}) {
           labelSwitch.checked = wantLabel;
           drawLabelStatus();
         }
+        if (!consumableTouched) {
+          wantConsumable = defaultConsumable(store.data, draft.tags);
+          consumableSwitch.checked = wantConsumable;
+        }
       },
     }, t)));
   };
@@ -609,7 +713,10 @@ function formView(id, q = {}) {
     if (existing?.label === 'printed' && existing.assetId && asset !== existing.assetId && !renumberConfirmed
       && !confirm(`编号从 ${existing.assetId} 改成 ${asset || '自动编号'}，已经贴着的旧标签就扫不出这件了，需要重新打印。继续？`)) return;
     draft.assetId = asset;
-    draft.quantity = Math.max(1, Number(draft.quantity) || 1);
+    draft.consumable = wantConsumable;
+    // 消耗品数量可以是 0（用完了）；其他东西至少 1
+    const n = Number(draft.quantity);
+    draft.quantity = wantConsumable ? (Number.isFinite(n) && n >= 0 ? n : 1) : Math.max(1, n || 1);
     draft.purchasePrice = draft.purchasePrice === '' || draft.purchasePrice == null ? null : Number(draft.purchasePrice);
     draft.fields = Object.fromEntries(fieldRows.filter((r) => r.k.trim() && String(r.v).trim()).map((r) => [r.k.trim(), String(r.v).trim()]));
     for (const k of ['manufacturer', 'modelNumber', 'serialNumber', 'purchaseFrom', 'description', 'notes']) {
@@ -677,7 +784,9 @@ function formView(id, q = {}) {
     h('div', { class: 'label' }, '标签', h('span', { class: 'hint inline' }, '第一个选的标签决定编号类别'), tagBox),
     h('div', { class: 'label' }, '编号', h('div', { class: 'asset-row' }, assetInput, suggestBtn), renumberBtn, assetMsg),
     h('div', { class: 'label' }, h('label', { class: 'switch-row' }, labelSwitch, '贴标签'), labelStatus),
-    h('label', {}, '数量', bind('quantity', { type: 'number', min: 1, inputmode: 'numeric' })),
+    h('div', { class: 'label' }, h('label', { class: 'switch-row' }, consumableSwitch, '消耗品'),
+      h('div', { class: 'hint' }, '会用完、还会再买的东西。用完了不归档，进「需要补货」，补货后编号不变。')),
+    h('label', {}, '数量', bind('quantity', { type: 'number', min: 0, inputmode: 'numeric' })),
     h('div', { class: 'label' }, '其他信息', fieldBox),
     h('label', {}, '描述', bind('description', { multiline: true, rows: 2 })),
     h('details', { open: Boolean(draft.manufacturer || draft.purchaseDate || draft.serialNumber || draft.warrantyExpires) },
@@ -900,6 +1009,7 @@ function moreView() {
     header('更多'),
     h('div', { class: 'list' },
       entry('#/labels', '标签', `待打印 ${pending} 张 · 已打印 ${printed} 张`, pending || null),
+      entry('#/restock', '需要补货', '用完了的消耗品，相当于购物清单', store.data.items.filter((i) => isDepleted(i) && !i.archived).length || null),
       entry('#/reminders', '到期提醒', `保质期、保修 ${store.data.reminderDays} 天内到期的东西`, due || null),
       entry('#/stats', '统计', '每类、每个柜子有多少东西，值多少钱'),
       entry('#/manage', '管理位置和标签', '新建、改名、类别编号、哪些类别不贴标签'),
@@ -1047,6 +1157,19 @@ function labelView(type, id) {
           : null)));
 }
 
+// ---------- 需要补货 ----------
+
+function restockView() {
+  const list = store.data.items.filter((i) => isDepleted(i) && !i.archived)
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  return h('div', {},
+    header('需要补货'),
+    h('p', { class: 'muted small' }, '用完了的消耗品。买回来后点「补货」填数量和新保质期，编号不变；以后不打算再买，就去物品页归档。'),
+    list.length ? h('div', { class: 'list' }, list.map((i) => h('div', { class: 'restock-row' },
+      itemRow(i), h('button', { class: 'small', onclick: () => openRestock(i) }, '补货'))))
+      : h('div', { class: 'card' }, h('p', {}, '没有用完待补的东西。')));
+}
+
 // ---------- 到期提醒 ----------
 
 function remindersView() {
@@ -1089,7 +1212,10 @@ function statsView() {
     .filter(({ loc }) => !store.children(loc.id).length) // 只列最底层的柜子，避免重复计数
     .map(({ loc }) => { const list = items.filter((i) => i.location === loc.id); return { label: loc.name.split(' ')[0], count: list.length, value: value(list), href: `#/place/${loc.id}` }; })
     .filter((r) => r.count).sort((a, b) => b.count - a.count);
-  const archived = store.data.items.length - items.length;
+  const archivedItems = store.data.items.filter((i) => i.archived);
+  const archived = archivedItems.length;
+  const byReason = ARCHIVE_REASONS.map((r) => ({ label: r, count: archivedItems.filter((i) => (i.archiveReason || '其他') === r).length, href: '#/' }))
+    .filter((r) => r.count);
   const noPhoto = items.filter((i) => !i.photos?.length).length;
 
   return h('div', {},
@@ -1103,7 +1229,8 @@ function statsView() {
     h('div', { class: 'card' }, h('h3', {}, '按类别（第一个标签）'), byTag.length ? bars(byTag) : h('p', { class: 'muted' }, '还没有物品'),
       untagged ? h('p', { class: 'muted small' }, `另有 ${untagged} 件没有标签`) : null),
     h('div', { class: 'card' }, h('h3', {}, '按位置'), byPlace.length ? bars(byPlace) : h('p', { class: 'muted' }, '还没有物品')),
-    h('p', { class: 'muted small' }, `已归档 ${archived} 件（不计入上面的数字）· 没有照片的 ${noPhoto} 件 · 价值只统计填了价格的物品`));
+    byReason.length ? h('div', { class: 'card' }, h('h3', {}, `已归档（${archived}）`), bars(byReason)) : null,
+    h('p', { class: 'muted small' }, `已归档 ${archived} 件（不计入上面的数字）· 已用完 ${items.filter(isDepleted).length} 件 · 没有照片的 ${noPhoto} 件 · 价值只统计填了价格的物品`));
 }
 
 // ---------- 管理位置和标签 ----------
@@ -1148,6 +1275,7 @@ function manageView() {
         if (data[key]?.[tag] !== undefined) { data[key][to] = data[key][tag]; delete data[key][tag]; }
       }
       data.unlabeledTags = data.unlabeledTags.map((t) => (t === tag ? to : t));
+      data.consumableTags = data.consumableTags.map((t) => (t === tag ? to : t));
     });
   };
   const deleteTag = (tag) => {
@@ -1159,6 +1287,7 @@ function manageView() {
       delete data.fieldPresets?.[tag];
       delete data.tagCodes[tag];
       data.unlabeledTags = data.unlabeledTags.filter((t) => t !== tag);
+      data.consumableTags = data.consumableTags.filter((t) => t !== tag);
     });
   };
   const editCode = (tag) => {
@@ -1169,6 +1298,12 @@ function manageView() {
     const owner = Object.entries(store.data.tagCodes).find(([t, c]) => c === code && t !== tag);
     if (owner) return toast(`${code} 已经给「${owner[0]}」用了`, 'error');
     save(`类别编号：${tag} → ${code}`, (data) => { data.tagCodes[tag] = code; });
+  };
+  const toggleConsumable = (tag) => {
+    const on = store.data.consumableTags.includes(tag);
+    save(`${tag}：${on ? '默认不是消耗品' : '默认是消耗品'}`, (data) => {
+      data.consumableTags = on ? data.consumableTags.filter((t) => t !== tag) : [...data.consumableTags, tag];
+    });
   };
   const toggleLabel = (tag) => {
     const off = store.data.unlabeledTags.includes(tag);
@@ -1189,13 +1324,15 @@ function manageView() {
       h('button', { class: 'secondary', onclick: () => addLocation(null) }, '新建顶层位置')),
     h('section', { class: 'card' },
       h('h3', {}, '标签'),
-      h('p', { class: 'muted small' }, '编号的前 3 位由物品的第一个标签决定，柜子统一是 010。标「不贴」的类别新建时不自动给编号。'),
+      h('p', { class: 'muted small' }, '编号的前 3 位由物品的第一个标签决定，柜子统一是 010。「不贴 / 贴标签」「消耗品 / 耐用」是新建时的默认值，每件东西都能单独改。'),
       store.data.tags.map((tag) => {
         const off = store.data.unlabeledTags.includes(tag);
         return h('div', { class: 'manage-row' },
           h('button', { class: 'link asset', onclick: () => editCode(tag) }, store.data.tagCodes[tag]),
           h('span', { class: 'grow' }, tag),
           h('button', { class: `link${off ? ' muted' : ''}`, onclick: () => toggleLabel(tag) }, off ? '不贴' : '贴标签'),
+          h('button', { class: `link${store.data.consumableTags.includes(tag) ? '' : ' muted'}`, onclick: () => toggleConsumable(tag) },
+            store.data.consumableTags.includes(tag) ? '消耗品' : '耐用'),
           h('button', { class: 'link', onclick: () => renameTag(tag) }, '改名'),
           h('button', { class: 'link danger-text', onclick: () => deleteTag(tag) }, '删除'));
       }),

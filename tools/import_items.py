@@ -126,13 +126,36 @@ def normalize_asset_id(value):
     return f"{s[:3]}-{s[3:]}"
 
 
+DEFAULT_CONSUMABLE = ["零食食品", "药品急救", "洗漱护肤", "清洁用品"]
+
+
 def migrate(data):
-    """和网页 store.js 的 migrate() 一致：旧版 labelPrinted 布尔值 → label 三种状态。"""
+    """和网页 store.js 的 migrate() 保持一致。"""
     for x in data["items"] + data["locations"]:
         if not x.get("label"):
             x["label"] = "none" if not x.get("assetId") else "printed" if x.get("labelPrinted") is True else "pending"
         x.pop("labelPrinted", None)
+    if "consumableTags" not in data:
+        data["consumableTags"] = [t for t in DEFAULT_CONSUMABLE if t in data["tags"]]
+    data.setdefault("assetHighWater", {})
+    bump_high_water(data)
+    for it in data["items"]:
+        if "consumable" not in it:
+            it["consumable"] = default_consumable(data, it.get("tags", []))
     return data
+
+
+def bump_high_water(data):
+    """每类用到过的最大编号，只增不减：删除东西后编号也不会再分出去。"""
+    hw = data.setdefault("assetHighWater", {})
+    for x in data["items"] + data["locations"]:
+        a = x.get("assetId")
+        if a:
+            hw[a[:3]] = max(hw.get(a[:3], 0), int(a[4:]))
+
+
+def default_consumable(data, tags):
+    return bool(tags) and tags[0] in data.get("consumableTags", [])
 
 
 def default_label(data, tags):
@@ -145,7 +168,8 @@ def prefix_for(data, tags):
 
 
 def next_in_prefix(data, prefix, taken=()):
-    nums = [int(x["assetId"][4:]) for x in data["items"] + data["locations"] if (x.get("assetId") or "").startswith(prefix + "-")]
+    nums = [data.get("assetHighWater", {}).get(prefix, 0)]
+    nums += [int(x["assetId"][4:]) for x in data["items"] + data["locations"] if (x.get("assetId") or "").startswith(prefix + "-")]
     nums += [int(a[4:]) for a in taken if a.startswith(prefix + "-")]
     n = max(nums, default=0) + 1
     if n > 999:
@@ -216,6 +240,8 @@ def check(manifest, base_dir, data):
                 item["_label"] = "none"
             else:
                 item["_label"] = default_label(data, item.get("tags", []))
+            # 消耗品：consumable: true / false 覆盖按类别的默认值
+            item["_consumable"] = bool(item["consumable"]) if "consumable" in item else default_consumable(data, item.get("tags", []))
             if asset in used:
                 errors.append(f"{label}：编号 {asset} 已经被「{used[asset]}」用了")
             elif asset in seen:
@@ -274,6 +300,7 @@ def build_record(item, item_id, photo_entries, now):
         "archived": False, "createdAt": now, "updatedAt": now,
     }
     rec["label"] = item["_label"]
+    rec["consumable"] = item["_consumable"]
     for key in TEXT_FIELDS:
         rec[key] = str(item.get(key) or "").strip()
     return rec
@@ -361,6 +388,7 @@ def main():
         if clash:
             raise ImportError_(f"录入期间编号被占用：{'、'.join(clash)}。没有写入任何数据")
         latest["items"].extend(r for _, r in records)
+        bump_high_water(latest)
         content = json.dumps(latest, ensure_ascii=False, indent=1) + "\n"
         try:
             gh.commit(head, [{"path": DATA_FILE, "content": content}, *uploads], message)

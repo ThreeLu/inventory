@@ -27,6 +27,7 @@ python3 tools/import_items.py --options
 - 一张照片里有好几件不同的东西：拆成多条，可以共用这张照片。拿不准是一件还是一套时，问用户。
 - **编号不用填**：每件都会有编号，脚本写入时按第一个标签的类别自动给（如电子产品 `100-005`）。所以**第一个标签要选准**，它决定编号类别。
   - 照片里已经贴着本系统的标签（如 `100-003`）：读出来填进 `assetId`。看不清就填 `"?"` 请用户补，**绝不猜**。
+- **消耗品**（会用完、还会再买的）：默认零食食品、药品急救、洗漱护肤、清洁用品是，其他不是；某件要改就写 `"consumable": true/false`。
 - **贴不贴标签**和编号无关：默认衣服、运动服、鞋不贴，其他贴（进「待打印」）。某件要改就写 `"label": false`（不贴）或 `"label": true`（要贴）。
 - **名称**写具体：`颜色 + 品类 + （品牌）`，如 `黑色羽绒服（优衣库）`。看不出品牌就不写。
 - **标签**只用 `--options` 列出的，拿不准就问。
@@ -69,7 +70,7 @@ python3 tools/import_items.py --options
 ```
 
 - 顶层 `location` 是这批的默认位置；某件在别处就用它自己的 `location`。写柜子中文名就行。
-- 可用字段：`name`、`tags`、`assetId`、`label`、`quantity`、`location`、`description`、`photos`、`receipts`、`manufacturer`、`modelNumber`、`serialNumber`、`purchaseDate`、`purchasePrice`、`purchaseFrom`、`warrantyExpires`、`notes`、`fields`。
+- 可用字段：`name`、`tags`、`assetId`、`label`、`consumable`、`quantity`、`location`、`description`、`photos`、`receipts`、`manufacturer`、`modelNumber`、`serialNumber`、`purchaseDate`、`purchasePrice`、`purchaseFrom`、`warrantyExpires`、`notes`、`fields`。
 
 ## 3. 给用户确认
 

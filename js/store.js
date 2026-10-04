@@ -13,13 +13,20 @@ export const LOCATION_PREFIX = '010';
 export const UNTAGGED_PREFIX = '000';
 const RESERVED_PREFIXES = [UNTAGGED_PREFIX, LOCATION_PREFIX];
 const DEFAULT_UNLABELED = ['衣服', '运动服', '鞋'];
+const DEFAULT_CONSUMABLE = ['零食食品', '药品急救', '洗漱护肤', '清洁用品'];
+export const ARCHIVE_REASONS = ['扔掉', '用完不再买', '送人', '卖掉', '丢失', '坏了', '其他'];
 
 // 补齐旧数据缺的字段（类别编号、默认不贴标签的类别、提醒天数、标签状态）。每次读到数据都调用。
 export function migrate(data) {
   data.tagCodes ||= {};
   if (!data.unlabeledTags) data.unlabeledTags = DEFAULT_UNLABELED.filter((t) => data.tags.includes(t));
+  if (!data.consumableTags) data.consumableTags = DEFAULT_CONSUMABLE.filter((t) => data.tags.includes(t));
   data.reminderDays ||= 30;
   for (const tag of data.tags) if (!data.tagCodes[tag]) data.tagCodes[tag] = nextTagCode(data);
+  // 每类用到过的最大编号：删除东西也不会往回退，所以编号永不复用
+  data.assetHighWater ||= {};
+  bumpHighWater(data);
+  for (const item of data.items) if (item.consumable === undefined) item.consumable = defaultConsumable(data, item.tags);
   // 旧版用 labelPrinted 布尔值，现在是 label: 'none' | 'pending' | 'printed'
   for (const x of [...data.items, ...data.locations]) {
     if (!x.label) x.label = !x.assetId ? 'none' : x.labelPrinted === true ? 'printed' : 'pending';
@@ -49,6 +56,25 @@ export function nextTagCode(data) {
   throw new Error('类别编号用完了');
 }
 
+// 记下每类出现过的最大编号。每次保存前都调用（Store.save 里统一处理）
+export function bumpHighWater(data) {
+  for (const x of [...data.items, ...data.locations]) {
+    if (!x.assetId) continue;
+    const [prefix, n] = [x.assetId.slice(0, 3), Number(x.assetId.slice(4))];
+    if (!(data.assetHighWater[prefix] >= n)) data.assetHighWater[prefix] = n;
+  }
+}
+
+// 新建时「消耗品」开关的默认值：第一个标签在 consumableTags 里
+export function defaultConsumable(data, tags) {
+  return Boolean(tags.length && data.consumableTags.includes(tags[0]));
+}
+
+// 消耗品数量为 0 就是「用完了」，等着补货
+export function isDepleted(item) {
+  return Boolean(item.consumable && Number(item.quantity) === 0);
+}
+
 // 新建时「贴标签」开关的默认值：第一个标签是衣服、鞋这类就默认不贴。编号不受影响，每件都有。
 export function defaultLabel(data, tags) {
   return tags.length && data.unlabeledTags.includes(tags[0]) ? 'none' : 'pending';
@@ -58,9 +84,9 @@ export function prefixForTags(data, tags) {
   return tags.length ? data.tagCodes[tags[0]] || UNTAGGED_PREFIX : UNTAGGED_PREFIX;
 }
 
-// 这一类的下一个空号：100-001、100-002……
+// 这一类的下一个号：100-001、100-002……。用过的号（包括已删除的）永远不再分配
 export function nextAssetInPrefix(data, prefix) {
-  let max = 0;
+  let max = data.assetHighWater?.[prefix] || 0;
   for (const x of [...data.items, ...data.locations]) {
     if (x.assetId && x.assetId.startsWith(`${prefix}-`)) max = Math.max(max, Number(x.assetId.slice(4)));
   }
@@ -81,7 +107,7 @@ export function reminders(data, days = data.reminderDays || 30) {
   today.setHours(0, 0, 0, 0);
   const out = [];
   for (const item of data.items) {
-    if (item.archived) continue;
+    if (item.archived || isDepleted(item)) continue; // 归档的、用完的不提醒
     const checks = [['保质期', item.fields?.['保质期']], ['保修', item.warrantyExpires]];
     for (const [kind, text] of checks) {
       const date = parseDate(text);
@@ -153,6 +179,7 @@ export class Store {
       const base = head === this.head && this.data ? this.data : migrate(JSON.parse(await this.gh.readText(DATA_FILE, head)));
       const next = structuredClone(base);
       const result = mutate(next);
+      bumpHighWater(next);
       const changes = [
         { path: DATA_FILE, content: JSON.stringify(next, null, 1) + '\n' },
         ...blobs,

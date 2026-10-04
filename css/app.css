@@ -342,3 +342,20 @@ nav .dot { position: absolute; top: 1px; right: -6px; width: 8px; height: 8px; b
 
 /* 放在最后：比 .check-row、.photo-add 这类带 !important 的 display 更晚，hidden 才能生效 */
 [hidden] { display: none !important; }
+
+/* 底部弹出的小表单 */
+.sheet-overlay { position: fixed; inset: 0; z-index: 45; background: rgba(0, 0, 0, 0.4); display: flex; align-items: flex-end; justify-content: center; }
+.sheet {
+  width: 100%; max-width: 720px; background: var(--card); border-radius: 16px 16px 0 0;
+  padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); max-height: 85vh; overflow-y: auto;
+}
+.sheet h3 { color: var(--text); font-size: 17px; }
+.sheet input:not([type=checkbox]) { margin: 8px 0; }
+.sheet .actions { margin-top: 14px; }
+.sheet .actions button { flex: 1; }
+.badge.warn { background: color-mix(in srgb, var(--danger) 14%, var(--card)); color: var(--danger); }
+.restock-row { display: flex; align-items: center; gap: 8px; }
+.restock-row .row { flex: 1; min-width: 0; }
+.restock-row button { flex: none; }
+
+[hidden] { display: none !important; }
