@@ -61,6 +61,8 @@ def seed():
         I("itb", "牙刷", "洗漱护肤", "Lstore", "150-001", labelPrinted=False),
         I("imed", "布洛芬片", "药品急救", "Lbulk", "290-001", quantity=2, fields={"保质期": "2027-11-20"}, labelPrinted=False),
         I("ibook", "线性代数（第六版）", "书籍资料", "Ldrawer", "190-001", labelPrinted=False),
+        I("icold1", "999感冒灵颗粒", "药品急救", "Lbulk", "290-002", label="none"),
+        I("icold2", "感康（复方氨酚烷胺片）", "药品急救", "Lbulk", "290-003", label="none"),
     ]
     data = {"version": 1, "tags": tags, "locations": locations, "items": items,
             "fieldPresets": {"衣服": ["季节", "颜色", "尺码"], "零食食品": ["保质期"], "药品急救": ["保质期", "规格", "剩余"]}}
@@ -136,7 +138,7 @@ def _(c):
     p.get_by_label("令牌到期日").fill(D(5))
     p.get_by_role("button", name="保存并连接").click()
     expect(p.get_by_role("heading", name="物品")).to_be_visible()
-    expect(p.get_by_text("9 件")).to_be_visible()
+    expect(p.get_by_text("11 件")).to_be_visible()
     expect(p.get_by_text("GitHub 令牌还有")).to_be_visible()
     expect(p.locator(".row", has_text="布洛芬片").locator(".asset")).to_have_text("290-0001")
 
@@ -326,8 +328,10 @@ def _(c):
     p.get_by_label("返回").fill(D(3))
     p.get_by_role("button", name="生成推荐").click()
     expect(p.get_by_text("规则推荐")).to_be_visible(timeout=20000)
-    for name in ["黑色羽绒服", "身份证", "手机充电器"]:
+    for name in ["黑色羽绒服", "身份证", "手机充电器", "布洛芬片"]:
         expect(p.locator(".check-row", has_text=name)).to_be_visible()
+    # 两种感冒药只带一种
+    expect(p.locator(".check-row", has_text="感冒灵").or_(p.locator(".check-row", has_text="感康"))).to_have_count(1)
     expect(p.locator(".check-row", has_text="白色T恤")).to_have_count(0)   # 已归档，且是夏装
 
 

@@ -118,7 +118,17 @@ export function rulePlan(data, trip, weather) {
   for (const i of [...of('证件文件'), ...of('钥匙')]) pick(i, '每次出门必带');
   for (const i of of('电子产品').filter((i) => has(i, ['充电', '数据线', '耳机', '充电宝', '电脑', '转换']))) pick(i, '常用电子产品');
   for (const i of of('洗漱护肤')) pick(i, '洗漱');
-  for (const i of of('药品急救').filter((i) => has(i, ['感冒', '布洛芬', '蒙脱石', '创可贴', '肠', '晕', '过敏']))) pick(i, '常备药');
+  // 常备药：每一类只带一种（按名称判断），不然会把一整柜感冒药都列进来
+  const MED_GROUPS = [
+    ['感冒', ['感冒', '感康', '小柴胡', '连花', '板蓝根']], ['退烧止痛', ['布洛芬', '对乙酰', '退烧', '止痛', '芬必得']],
+    ['肠胃', ['蒙脱石', '止泻', '肠', '胃', '保赤']], ['过敏', ['过敏', '氯雷他定', '西替利嗪', '酮替芬']],
+    ['外伤', ['创可贴', '碘伏']], ['晕车', ['晕']],
+  ];
+  const meds = of('药品急救');
+  for (const [kind, words] of MED_GROUPS) {
+    const m = meds.find((i) => words.some((w) => i.name.includes(w)));
+    if (m) pick(m, `常备药（${kind}）`);
+  }
   if (w.rain >= 40) for (const i of pool.filter((i) => has(i, ['伞', '雨衣'])).slice(0, 1)) pick(i, `降水概率 ${w.rain}%`);
   for (const i of of('包').filter((i) => has(i, ['行李箱', '背包', '双肩'])).slice(0, 1)) pick(i, '装东西');
 
