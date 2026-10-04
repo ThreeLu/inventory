@@ -3,7 +3,7 @@
 手机上用的物品档案网页：https://threelu.github.io/inventory/
 
 - 本仓库只有网页程序，**没有任何数据**。数据在私有仓库里，每台设备第一次打开时填一个只能访问那个仓库的 GitHub 令牌。
-- 标签二维码内容是 `https://threelu.github.io/inventory/?a=000-123`，扫码直接打开对应物品；没建档的编号会进入新建页面。
+- 标签二维码内容是 `https://threelu.github.io/inventory/?a=000-0123`，扫码直接打开对应物品；没建档的编号会进入新建页面。
 - 纯静态页面，没有构建步骤，推送到 main 分支后由 GitHub Pages 自动发布。
 
 ## 文件

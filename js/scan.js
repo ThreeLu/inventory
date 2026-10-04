@@ -14,13 +14,13 @@ function loadJsQR() {
   return jsQRLoading;
 }
 
-// 从二维码内容里取出编号：本站网址 ?a=000-123，或者直接是 000-123
+// 从二维码内容里取出编号：本站网址 ?a=290-0001，或者直接是 290-0001
 export function assetFromScan(text) {
   try {
     const a = new URL(text).searchParams.get('a');
     if (a) return a;
   } catch { /* 不是网址 */ }
-  return /^\s*\d{3}-?\d{3}\s*$/.test(text) ? text.trim() : null;
+  return /^\s*\d{3}-?\d{3,4}\s*$/.test(text) ? text.trim() : null;
 }
 
 // 返回 stop()。onCode 对同一个二维码 2 秒内只触发一次。

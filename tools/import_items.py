@@ -32,7 +32,7 @@ from PIL import Image, ImageOps
 
 REPO = "ThreeLu/inventory-data"
 DATA_FILE = "inventory.json"
-ASSET_MAX = 899999
+PREFIX_MAX, SEQ_MAX = 899, 9999  # 编号 XXX-YYYY
 PHOTO_TYPES = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 TEXT_FIELDS = ["description", "manufacturer", "modelNumber", "serialNumber", "purchaseDate",
                "purchaseFrom", "warrantyExpires", "notes"]
@@ -114,16 +114,18 @@ def get_token():
 # ---------- 数据 ----------
 
 def normalize_asset_id(value):
+    """290-1、290-001、290-0001、2900001 都认成 290-0001（和网页 normalizeAssetId 一致）。"""
     if value is None or str(value).strip() == "":
         return None
-    digits = re.sub(r"[\s-]", "", str(value))
-    if not digits.isdigit() or len(digits) > 6:
-        raise ImportError_(f"编号格式不对：{value}（应该像 000-123）")
-    n = int(digits)
-    if not 1 <= n <= ASSET_MAX:
-        raise ImportError_(f"编号 {value} 超出范围（000-001 ~ 899-999）")
-    s = f"{n:06d}"
-    return f"{s[:3]}-{s[3:]}"
+    text = re.sub(r"\s", "", str(value))
+    m = re.fullmatch(r"(\d{1,3})-(\d{1,4})", text)
+    parts = (m.group(1), m.group(2)) if m else (text[:3], text[3:]) if re.fullmatch(r"\d{6,7}", text) else None
+    if not parts:
+        raise ImportError_(f"编号格式不对：{value}（应该像 290-0001）")
+    prefix, n = int(parts[0]), int(parts[1])
+    if prefix > PREFIX_MAX or not 1 <= n <= SEQ_MAX:
+        raise ImportError_(f"编号 {value} 超出范围（前 3 位 000～899，后 4 位 0001～9999）")
+    return f"{prefix:03d}-{n:04d}"
 
 
 DEFAULT_CONSUMABLE = ["零食食品", "药品急救", "洗漱护肤", "清洁用品"]
@@ -132,6 +134,8 @@ DEFAULT_CONSUMABLE = ["零食食品", "药品急救", "洗漱护肤", "清洁用
 def migrate(data):
     """和网页 store.js 的 migrate() 保持一致。"""
     for x in data["items"] + data["locations"]:
+        if re.fullmatch(r"\d{3}-\d{3}", x.get("assetId") or ""):
+            x["assetId"] = f"{x['assetId'][:4]}0{x['assetId'][4:]}"  # 旧版后段 3 位 → 4 位
         if not x.get("label"):
             x["label"] = "none" if not x.get("assetId") else "printed" if x.get("labelPrinted") is True else "pending"
         x.pop("labelPrinted", None)
@@ -172,9 +176,9 @@ def next_in_prefix(data, prefix, taken=()):
     nums += [int(x["assetId"][4:]) for x in data["items"] + data["locations"] if (x.get("assetId") or "").startswith(prefix + "-")]
     nums += [int(a[4:]) for a in taken if a.startswith(prefix + "-")]
     n = max(nums, default=0) + 1
-    if n > 999:
-        raise ImportError_(f"编号 {prefix}-xxx 已经用完了")
-    return f"{prefix}-{n:03d}"
+    if n > SEQ_MAX:
+        raise ImportError_(f"编号 {prefix}-xxxx 已经用完了")
+    return f"{prefix}-{n:04d}"
 
 
 def location_paths(data):

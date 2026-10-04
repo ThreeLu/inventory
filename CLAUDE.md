@@ -20,13 +20,13 @@
             warrantyExpires, notes, consumable, archived, archiveReason, archivedAt, label, labelPrintedAt, createdAt, updatedAt }] }
 ```
 
-- 编号 `XXX-YYY`：前 3 位是类别（物品按**建档时第一个标签**查 `tagCodes`，柜子等位置统一 `010`，无标签 `000`），后 3 位是该类顺序号。**每件物品都有编号**，之后改标签不自动换号（编辑页会提示不一致，可手动「按新类别重新编号」）。物品和位置共用、不能重复，范围到 899。
+- 编号 `XXX-YYYY`：前 3 位是类别（物品按**建档时第一个标签**查 `tagCodes`，柜子等位置统一 `010`，无标签 `000`），后 4 位是该类顺序号（0001～9999）。**每件物品都有编号**，之后改标签不自动换号（编辑页会提示不一致，可手动「按新类别重新编号」）。物品和位置共用、不能重复，前 3 位范围 000～899。
 - 编号和贴不贴标签是两回事。`label`：`none` 不贴 / `pending` 待打印 / `printed` 已打印（`labelPrintedAt` 日期）。新建默认：`unlabeledTags`（衣服、运动服、鞋）为 none，其他 pending。打完标记 printed；「重新打印」回到 pending（编号不变）；改编号且要贴 → pending；关掉贴标签 → none（编号保留，已贴的照样能扫）。下载 Excel 不自动标记。
 - `reminderDays` 天内到期的「保质期」字段和 `warrantyExpires` 会在首页提醒；数据仓库里的 `.github/workflows/reminders.yml` 每周一建 issue @用户，GitHub 发通知邮件。
 - 编号永不复用：`assetHighWater` 记每类用到过的最大号（只增不减，`Store.save` 里统一更新），新号 = max(它, 现有最大) + 1，删除也不会让号回退。
 - 退役：扔掉/送人/丢失等用「归档」（`archived`、`archiveReason`、`archivedAt`），记录和编号都保留；「删除」只用于录错。消耗品（`consumable`，默认按 `consumableTags`）用完了把 `quantity` 设为 0（不归档），进「需要补货」；补货填新数量和保质期，编号不变，可选重新打印标签。用完的不做到期提醒。
 - 旧数据缺 `tagCodes` 等字段、或还是旧的 `labelPrinted` 布尔值时，`store.js` 的 `migrate()` 会补上/转换；`tools/import_items.py` 的 `migrate()` 做同样的转换，两边要保持一致。
-- 标签二维码内容：`https://threelu.github.io/inventory/?a=000-123`。**改仓库名或网址会让已贴的标签全部失效。**
+- 标签二维码内容：`https://threelu.github.io/inventory/?a=000-0123`。**改仓库名或网址会让已贴的标签全部失效。**
 - 照片文件名随机且写入后不改，网页会永久缓存；改照片要换新文件名。
 - 位置名称「中文 English」，柜子都在主屋；不用的东西归档并在备注写原因，不删除。
 

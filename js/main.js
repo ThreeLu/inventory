@@ -1,6 +1,6 @@
 import { GitHub } from './github.js';
 import {
-  Store, normalizeAssetId, newId, assertAssetFree, ASSET_MAX, LOCATION_PREFIX,
+  Store, normalizeAssetId, newId, assertAssetFree, LOCATION_PREFIX,
   defaultLabel, setLabel, LABEL_TEXT, prefixForTags, defaultConsumable, isDepleted, ARCHIVE_REASONS, nextAssetInPrefix, nextTagCode, reminders,
 } from './store.js';
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
@@ -53,7 +53,7 @@ async function refresh() {
 }
 
 function boot() {
-  // 扫码进来的网址是 ?a=000-123，转成页面内的路由
+  // 扫码进来的网址是 ?a=290-0001，转成页面内的路由
   const scanned = new URLSearchParams(window.location.search).get('a');
   if (scanned) history.replaceState(null, '', `${window.location.pathname}#/a/${encodeURIComponent(scanned)}`);
 
@@ -561,7 +561,7 @@ function formView(id, q = {}) {
 
   // ---- 编号 ----
   const assetInput = h('input', {
-    value: draft.assetId || '', inputmode: 'numeric', placeholder: '例如 100-003',
+    value: draft.assetId || '', inputmode: 'numeric', placeholder: '例如 290-0001',
     oninput: (e) => { autoAsset = false; checkAsset(e.target.value); },
   });
   const assetMsg = h('div', { class: 'hint' });
@@ -1122,7 +1122,7 @@ function drawLabel(assetId, name) {
   ctx.fillStyle = '#000';
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) ctx.fillRect(ox + c * cell, oy + r * cell, cell, cell);
   ctx.textAlign = 'center';
-  ctx.font = 'bold 72px system-ui, sans-serif';
+  ctx.font = 'bold 60px system-ui, sans-serif';
   const [a, b] = assetId.split('-');
   ctx.fillText(a, 552, 150);
   ctx.fillText(b, 552, 240);

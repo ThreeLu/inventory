@@ -6,7 +6,10 @@ import { GitHubError } from './github.js';
 const DATA_FILE = 'inventory.json';
 const CACHE_KEY = 'inventory-cache';
 
-export const ASSET_MAX = 899999; // 标签编号范围 000-001 ~ 899-999
+// 编号格式 XXX-YYYY：前 3 位类别（000～899），后 4 位顺序号（0001～9999）
+export const PREFIX_MAX = 899;
+export const SEQ_MAX = 9999;
+const formatAsset = (prefix, n) => `${String(prefix).padStart(3, '0')}-${String(n).padStart(4, '0')}`;
 
 // 编号前 3 位表示类别：物品按第一个标签，柜子等位置统一用 010，没有标签的物品用 000
 export const LOCATION_PREFIX = '010';
@@ -27,8 +30,9 @@ export function migrate(data) {
   data.assetHighWater ||= {};
   bumpHighWater(data);
   for (const item of data.items) if (item.consumable === undefined) item.consumable = defaultConsumable(data, item.tags);
-  // 旧版用 labelPrinted 布尔值，现在是 label: 'none' | 'pending' | 'printed'
+  // 旧版用 labelPrinted 布尔值，现在是 label: 'none' | 'pending' | 'printed'；旧版编号后段 3 位，现在 4 位
   for (const x of [...data.items, ...data.locations]) {
+    if (x.assetId && /^\d{3}-\d{3}$/.test(x.assetId)) x.assetId = `${x.assetId.slice(0, 4)}0${x.assetId.slice(4)}`;
     if (!x.label) x.label = !x.assetId ? 'none' : x.labelPrinted === true ? 'printed' : 'pending';
     delete x.labelPrinted;
   }
@@ -90,8 +94,8 @@ export function nextAssetInPrefix(data, prefix) {
   for (const x of [...data.items, ...data.locations]) {
     if (x.assetId && x.assetId.startsWith(`${prefix}-`)) max = Math.max(max, Number(x.assetId.slice(4)));
   }
-  if (max >= 999) throw new Error(`编号 ${prefix}-xxx 已经用完了`);
-  return `${prefix}-${String(max + 1).padStart(3, '0')}`;
+  if (max >= SEQ_MAX) throw new Error(`编号 ${prefix}-xxxx 已经用完了`);
+  return formatAsset(prefix, max + 1);
 }
 
 // 到期提醒：零食药品的「保质期」字段、电子产品的保修到期。返回 [{ item, kind, date, days }]，按剩余天数排序
@@ -120,14 +124,16 @@ export function reminders(data, days = data.reminderDays || 30) {
   return out.sort((a, b) => a.days - b.days);
 }
 
+// 290-1、290-001、290-0001、2900001 都认成 290-0001；旧版 6 位（290001）也认
 export function normalizeAssetId(value) {
   if (value === null || value === undefined || String(value).trim() === '') return null;
-  const digits = String(value).replace(/[\s-]/g, '');
-  if (!/^\d{1,6}$/.test(digits)) throw new Error(`编号格式不对：${value}（应该像 000-123）`);
-  const n = Number(digits);
-  if (n < 1 || n > ASSET_MAX) throw new Error(`编号 ${value} 超出范围（000-001 ~ 899-999）`);
-  const s = String(n).padStart(6, '0');
-  return `${s.slice(0, 3)}-${s.slice(3)}`;
+  const text = String(value).replace(/\s/g, '');
+  let m = text.match(/^(\d{1,3})-(\d{1,4})$/);
+  if (!m && /^\d{6,7}$/.test(text)) m = [text, text.slice(0, 3), text.slice(3)];
+  if (!m) throw new Error(`编号格式不对：${value}（应该像 290-0001）`);
+  const [prefix, n] = [Number(m[1]), Number(m[2])];
+  if (prefix > PREFIX_MAX || n < 1 || n > SEQ_MAX) throw new Error(`编号 ${value} 超出范围（前 3 位 000～899，后 4 位 0001～9999）`);
+  return formatAsset(prefix, n);
 }
 
 export function newId(prefix) {
