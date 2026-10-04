@@ -155,9 +155,25 @@ export function laundryBatches(items) {
   return Object.entries(groups).filter(([, xs]) => xs.length);
 }
 
-// 箱子（搬家纸箱、出差的行李箱）是一种特殊的位置：box: 'move' | 'trip'
+// 位置的 box 字段：'move' 搬家纸箱、'trip' 出行的行李箱（都是临时的，东西装进去会记住原位置）；
+// 'bag' 收纳袋（常驻，平时放在某个柜子里，里面的东西算在家，扫袋子 = 扫里面登记的全部东西）
 export function isBox(data, locId) {
-  return Boolean(data.locations.find((l) => l.id === locId)?.box);
+  const box = data.locations.find((l) => l.id === locId)?.box;
+  return box === 'move' || box === 'trip';
+}
+
+export function isBag(data, locId) {
+  return data.locations.find((l) => l.id === locId)?.box === 'bag';
+}
+
+// 「家」：宿舍以外的地方，回家时留在家里的东西放这里。没有就建一个
+export function ensureHome(data) {
+  let home = data.locations.find((l) => l.home);
+  if (!home) {
+    home = { id: newId('L'), name: '家 Home', parent: null, assetId: null, label: 'none', home: true };
+    data.locations.push(home);
+  }
+  return home.id;
 }
 
 // 移动物品。装进箱子时记住原来的位置（homeLocation），拿出箱子时清掉，方便「全部放回原处」

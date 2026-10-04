@@ -2,7 +2,7 @@ import { GitHub } from './github.js';
 import {
   Store, normalizeAssetId, newId, assertAssetFree, LOCATION_PREFIX,
   defaultLabel, setLabel, LABEL_TEXT, prefixForTags, defaultConsumable, isDepleted, ARCHIVE_REASONS,
-  isBox, moveItem, borrowStatus,
+  isBox, isBag, ensureHome, moveItem, borrowStatus,
   INTIMATE_PARTS, laundryPrefs, laundryStatus, laundryBatches, localDay, setTodayWear, nextAssetInPrefix, nextTagCode, reminders,
 } from './store.js';
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
@@ -20,7 +20,7 @@ const DEFAULT_REPO = 'ThreeLu/inventory-data';
 // 二维码里的网址：本页地址 + ?a=编号
 const SITE_URL = window.location.origin + window.location.pathname;
 // 在这些页面上不要因为后台刷新而重画（会丢掉正在填的内容、关掉摄像头）
-const EDITING_ROUTES = /^\/(new|item\/[^/]+\/edit|scan)/;
+const EDITING_ROUTES = /^\/(new|item\/[^/]+\/edit|scan|check)/;
 
 const view = document.getElementById('view');
 const nav = document.getElementById('nav');
@@ -141,6 +141,9 @@ const routes = [
   [/^\/laundry$/, () => laundryView()],
   [/^\/season$/, () => seasonView()],
   [/^\/ask$/, () => chatView()],
+  [/^\/lists$/, () => listsView()],
+  [/^\/list\/([^/]+)$/, (id) => listView(id)],
+  [/^\/check\/(trip|box|list|bag)\/([^/]+)(?:\/(out|back))?$/, (m) => checkRoute(...m)],
   [/^\/stats$/, () => statsView()],
   [/^\/manage$/, () => manageView()],
   [/^\/settings$/, () => settingsView()],
@@ -150,7 +153,7 @@ const routes = [
 const NAV_GROUPS = {
   '/': [/^\/?$/, /^\/ask/],
   '/items': [/^\/items/, /^\/places?/, /^\/item\//, /^\/new/, /^\/a\//, /^\/scan/],
-  '/wardrobe': [/^\/wardrobe/, /^\/outfit/, /^\/wear/, /^\/laundry/, /^\/trips?/, /^\/season/],
+  '/wardrobe': [/^\/wardrobe/, /^\/outfit/, /^\/wear/, /^\/laundry/, /^\/trips?/, /^\/season/, /^\/lists?/, /^\/check/],
   '/me': [/^\/me/, /^\/more/, /^\/labels/, /^\/restock/, /^\/reminders/, /^\/stats/, /^\/manage/, /^\/settings/, /^\/boxes/, /^\/borrow/, /^\/loans/],
 };
 
@@ -190,7 +193,7 @@ function render() {
     if (re.source.includes('settings')) content = fn();
     else if (!settings.token) content = settingsView();
     else if (!store.data) content = loadError ? errorView(loadError) : h('p', { class: 'muted center' }, '正在读取数据…');
-    else content = fn(m[1], q);
+    else content = re.source.includes('check') ? fn(m.slice(1), q) : fn(m[1], q);
     break;
   }
   view.replaceChildren(content || notFound('没有这个页面'));
@@ -581,6 +584,7 @@ function itemView(id) {
     item.laundry && !item.archived ? h('div', { class: 'banner' }, item.laundry.autoReturn ? '贴身衣物，今天在洗，明天自动收回' : `${LAUNDRY_TEXT[item.laundry.state]}（${item.laundry.since.slice(5)} 起）`) : null,
     bs ? h('div', { class: `banner ${bs.overdue ? 'warn' : bs.soon ? 'soon' : ''}` },
       `借自${item.borrow.from}，${item.borrow.due} 前还`, bs.overdue ? `，已逾期 ${-bs.left} 天` : `，还剩 ${bs.left} 天`) : null,
+    item.leftBehind ? h('div', { class: 'banner warn' }, `${item.leftBehind.date} 出行时落在${item.leftBehind.place}了`) : null,
     item.homeLocation && isBox(store.data, item.location) ? h('div', { class: 'banner' },
       `装在「${store.shortName(item.location)}」里，原来在 ${store.locationPath(item.homeLocation)}`) : null,
     due.map((r) => h('div', { class: `banner ${r.days < 0 ? 'warn' : 'soon'}` }, `${r.kind}：${r.date}，${daysText(r.days)}`)),
@@ -614,6 +618,13 @@ function itemView(id) {
       ] : null,
       item.archived ? null : labelButtons('item', item),
       bs ? [h('button', { onclick: giveBack }, '已归还'), h('button', { class: 'secondary', onclick: renew }, '续借')] : null,
+      item.leftBehind ? [
+        h('button', { onclick: () => update(`找回来了：${item.name}`, (it) => { note(it, `找回来了（${it.leftBehind.date} 落在${it.leftBehind.place}）`); delete it.leftBehind; }) }, '找回来了'),
+        h('button', { class: 'secondary', onclick: () => confirm(`「${item.name}」找不到了？会归档（原因：丢失）。`) && update(`找不到了：${item.name}`, (it) => {
+          note(it, `落在${it.leftBehind.place}，找不到了`); delete it.leftBehind;
+          it.archived = true; it.archiveReason = '丢失'; it.archivedAt = today();
+        }) }, '找不到了'),
+      ] : null,
       !item.archived && canWash(item) ? (
         !item.laundry ? h('button', { class: 'secondary', onclick: () => setLaundry([id], 'dirty', `放进洗衣篮：${item.name}`) }, '放进洗衣篮')
           : item.laundry.state === 'dirty' ? h('button', { class: 'secondary', onclick: () => setLaundry([id], 'washing', `开洗：${item.name}`) }, '开洗')
@@ -1155,7 +1166,7 @@ function scanView() {
 
 function placesList() {
   return [
-    h('div', { class: 'list' }, store.locationTree().filter(({ loc }) => !loc.box).map(({ loc, depth }) =>
+    h('div', { class: 'list' }, store.locationTree().filter(({ loc }) => !isBox(store.data, loc.id)).map(({ loc, depth }) =>
       h('a', { class: 'row place', href: `#/place/${loc.id}`, style: `padding-left:${12 + depth * 22}px` },
         h('div', { class: 'row-main' },
           h('div', { class: 'row-title' }, loc.name),
@@ -1195,7 +1206,7 @@ function placeView(id) {
     loc.box ? boxPanel(loc, items) : null,
     h('p', { class: 'muted' }, `${items.length} 件`),
     h('div', { class: 'list' }, items.map((i) => itemRow(i))),
-    loc.box ? null : h('a', { class: 'button wide', href: `#/new?loc=${id}` }, '在这里新建物品'));
+    isBox(store.data, id) ? null : h('a', { class: 'button wide', href: `#/new?loc=${id}` }, '在这里新建物品'));
 }
 
 // ---------- 更多 ----------
@@ -1211,7 +1222,8 @@ function meView() {
       cell({ href: '#/labels', ic: 'printer', title: '标签打印', meta: pending ? `待打印 ${pending}` : '' }),
       cell({ href: '#/borrow', ic: 'book', color: 'var(--sage)', title: '借阅', count: borrowDue || null,
         meta: `${store.data.items.filter((i) => i.borrow && !i.archived).length} 本在借` }),
-      cell({ href: '#/boxes', ic: 'box', color: '#b98a5e', title: '装箱 / 搬家', meta: store.data.locations.filter((l) => l.box).length ? `${store.data.locations.filter((l) => l.box).length} 个箱子` : '' })),
+      cell({ href: '#/boxes', ic: 'box', color: '#b98a5e', title: '装箱 / 收纳袋', meta: store.data.locations.filter((l) => l.box).length ? `${store.data.locations.filter((l) => l.box).length} 个` : '' }),
+      cell({ href: '#/lists', ic: 'list', color: '#9a8c7a', title: '清单模板', meta: (store.data.lists || []).length ? `${store.data.lists.length} 个` : '' })),
     h('div', { class: 'section-title' }, '提醒和统计'),
     h('div', { class: 'group' },
       cell({ href: '#/reminders', ic: 'clock', color: 'var(--danger)', title: '到期提醒', count: due || null }),
@@ -1264,6 +1276,8 @@ function notices() {
     out.push({ href: '#/borrow', ic: 'book', color: 'var(--sage)', title: `${books.length} 本书要还了`,
       meta: `《${books[0].name}》${st.overdue ? `逾期 ${-st.left} 天` : `剩 ${st.left} 天`}` });
   }
+  const lost = store.data.items.filter((i) => i.leftBehind && !i.archived);
+  if (lost.length) out.push({ href: `#/item/${lost[0].id}`, ic: 'suitcase', color: 'var(--danger)', title: `${lost.length} 件东西落在外面了`, meta: `${lost[0].name} · ${lost[0].leftBehind.place}` });
   const depleted = store.data.items.filter((i) => isDepleted(i) && !i.archived);
   if (depleted.length) out.push({ href: '#/restock', ic: 'restock', color: 'var(--amber)', title: `${depleted.length} 件用完了`, meta: depleted[0].name });
   const trips = store.data.trips.filter((t) => t.status === 'packed');
@@ -1795,7 +1809,7 @@ function wardrobeView() {
         count: laundryStatus(store.data).due ? '!' : null })),
     h('div', { class: 'section-title' }, '出门和换季'),
     h('div', { class: 'group' },
-      cell({ href: '#/trips', ic: 'suitcase', color: '#5f7fa8', title: '出差 / 旅行',
+      cell({ href: '#/trips', ic: 'suitcase', color: '#5f7fa8', title: '出行',
         count: store.data.trips.filter((t) => t.status === 'packed').length || null }),
       cell({ href: '#/season', ic: 'season', color: 'var(--amber)', title: '换季整理', meta: next ? `下次：${next.name} ${next.date.slice(5).replace('-', '/')}` : '' })));
 }
@@ -2206,40 +2220,257 @@ function borrowView() {
     past.length ? [h('div', { class: 'section-title' }, '已归还'), h('div', { class: 'list' }, past.map((i) => itemRow(i)))] : null);
 }
 
-// ---------- 装箱 ----------
+// ---------- 扫码核对：出发、回程、拆箱、建模板、登记收纳袋共用 ----------
 
-function boxesView() {
-  const boxes = store.data.locations.filter((l) => l.box);
-  const create = () => {
-    const name = h('input', { placeholder: '比如 箱子 1、书籍箱', value: `箱子 ${boxes.filter((b) => b.box === 'move').length + 1}` });
+// 核对进度存在这台设备上（扫一件就存一次），中途离开再回来不会丢；完成后清掉
+const progressKey = (key) => `inventory-check-${key}`;
+function loadProgress(key) {
+  try { return JSON.parse(localStorage.getItem(progressKey(key))) || { done: [], added: [] }; } catch { return { done: [], added: [] }; }
+}
+function saveProgress(key, p) {
+  try { localStorage.setItem(progressKey(key), JSON.stringify(p)); } catch { /* 存不下就只放在内存里 */ }
+}
+function clearProgress(key) {
+  try { localStorage.removeItem(progressKey(key)); } catch { /* 忽略 */ }
+}
+
+// cfg: { key, title, sub, expected: [物品id], collect（扫到就加，不问）, doneText, finishText, onFinish(done: Set, added: [id]) }
+function checkView(cfg) {
+  const prog = loadProgress(cfg.key);
+  const added = [...new Set(prog.added)].filter((id) => store.item(id) && !cfg.expected.includes(id));
+  const expected = () => [...cfg.expected, ...added].filter((id) => store.item(id));
+  const done = new Set(prog.done.filter((id) => expected().includes(id)));
+  const persist = () => saveProgress(cfg.key, { done: [...done], added });
+
+  const video = h('video', { class: 'scan-video', playsinline: true, muted: true, autoplay: true });
+  const status = h('p', { class: 'muted small center' }, '正在打开摄像头…');
+  const progress = h('div', { class: 'check-progress' });
+  const lists = h('div', {});
+  const flash = h('div', { class: 'scan-flash', hidden: true });
+
+  const mark = (ids, label) => {
+    const fresh = ids.filter((id) => !done.has(id));
+    for (const id of fresh) done.add(id);
+    persist();
+    draw();
+    flash.textContent = `✓ ${label}`;
+    flash.hidden = false;
+    clearTimeout(flash.timer);
+    flash.timer = setTimeout(() => { flash.hidden = true; }, 1200);
+    if (navigator.vibrate) navigator.vibrate(fresh.length ? 60 : [30, 40, 30]);
+  };
+  const addItem = (id) => {
+    if (!added.includes(id) && !cfg.expected.includes(id)) added.push(id);
+    mark([id], store.item(id).name);
+  };
+  const onCode = (text) => {
+    const raw = assetFromScan(text);
+    let asset;
+    try { asset = raw && normalizeAssetId(raw); } catch { asset = null; }
+    const hit = asset && store.findByAsset(asset);
+    if (!hit) return toast(asset ? `编号 ${asset} 还没有建档` : '这不是物品标签的二维码', 'error');
+    if (hit.type === 'location') {
+      if (hit.obj.box !== 'bag') return toast(`这是「${hit.obj.name.split(' ')[0]}」的标签，不是物品`, 'error');
+      // 扫收纳袋 = 扫里面登记的全部东西
+      const inside = store.itemsIn(hit.obj.id).map((i) => i.id);
+      const inList = inside.filter((id) => expected().includes(id));
+      const outside = inside.filter((id) => !expected().includes(id));
+      if (cfg.collect) { for (const id of outside) if (!added.includes(id)) added.push(id); }
+      mark(cfg.collect ? inside : inList, `${hit.obj.name}：${cfg.collect ? inside.length : inList.length} 件`);
+      if (!cfg.collect && outside.length) toast(`袋子里还有 ${outside.length} 件不在清单上`);
+      return;
+    }
+    const id = hit.obj.id;
+    if (expected().includes(id)) return mark([id], hit.obj.name);
+    if (cfg.collect) return addItem(id);
     openSheet({
-      title: '新建搬家箱子',
-      body: h('div', { class: 'form' }, h('label', {}, '名称', name),
-        h('p', { class: 'muted small' }, '箱子会自动得到一个 010 开头的编号，标签进「待打印」。贴在箱子上，扫一下就能看到里面装了什么。')),
+      title: `「${hit.obj.name}」不在清单上`,
+      body: h('p', {}, '要加进清单吗？'),
+      confirmText: '加进清单',
+      onConfirm: () => { addItem(id); },
+    });
+  };
+
+  const draw = () => {
+    const all = expected();
+    const left = all.filter((id) => !done.has(id));
+    fill(progress,
+      h('div', { class: 'check-count' }, h('b', {}, done.size), ` / ${all.length}`, h('span', { class: 'muted small' }, ` ${cfg.doneText || '已确认'}`)),
+      h('div', { class: 'bar-track' }, h('span', { class: 'bar', style: `width:${all.length ? (done.size / all.length) * 100 : 0}%` })));
+    const row = (id, isDone) => {
+      const it = store.item(id);
+      return h('div', { class: 'check-item' },
+        h('span', { class: 'grow' }, it.name, h('span', { class: 'muted small block' },
+          [it.assetId && it.label !== 'none' ? '扫码' : '没标签，手动点', store.shortName(it.location)].join(' · '))),
+        isDone
+          ? h('button', { class: 'link', onclick: () => { done.delete(id); persist(); draw(); } }, '撤销')
+          : h('button', { class: 'small secondary', onclick: () => mark([id], it.name) }, '✓'));
+    };
+    fill(lists,
+      left.length ? [h('div', { class: 'section-title' }, `还差（${left.length}）`), h('div', { class: 'card' }, left.map((id) => row(id, false)))]
+        : cfg.collect ? h('p', { class: 'muted small' }, all.length ? `已有 ${all.length} 件，继续扫可以再加。` : '还是空的，扫码加东西。')
+          : all.length ? h('div', { class: 'banner soon' }, '全部到齐 ✓') : h('p', { class: 'muted small' }, '清单是空的。'),
+      done.size ? h('details', { class: 'card' }, h('summary', {}, `已确认（${done.size}）`), [...done].map((id) => row(id, true))) : null);
+  };
+  draw();
+
+  let stop = null;
+  let closed = false;
+  startScanner(video, onCode)
+    .then((s) => { if (closed) s(); else { stop = s; status.textContent = '对准标签连续扫；没标签的点 ✓'; } })
+    .catch((e) => { status.textContent = e.message; });
+  cleanup = () => { closed = true; if (stop) stop(); delete window.__scan; };
+  // 自动测试没有摄像头，从这里把扫到的内容喂进来
+  if (localStorage.getItem('inventory-test-scan')) window.__scan = onCode;
+
+  const finish = async () => {
+    try {
+      await cfg.onFinish(new Set(done), [...added]);
+      clearProgress(cfg.key);
+    } catch { /* onFinish 自己提示错误 */ }
+  };
+  return h('div', {},
+    header(cfg.title),
+    cfg.sub ? h('p', { class: 'muted small' }, cfg.sub) : null,
+    h('div', { class: 'scan-box short' }, video, h('div', { class: 'scan-frame' }), flash),
+    status, progress, lists,
+    h('div', { class: 'actions sticky' }, h('button', { onclick: finish }, cfg.finishText)));
+}
+
+// ---------- 清单模板 ----------
+
+const SCENES = ['出差', '回家', '搬家', '其他'];
+
+function listsView() {
+  const lists = store.data.lists || [];
+  const create = () => {
+    const name = h('input', { placeholder: '比如 回家、健身包' });
+    const scene = chipChoice(SCENES, '回家');
+    openSheet({
+      title: '新建清单模板',
+      body: h('div', { class: 'form' }, h('label', {}, '名称', name), h('div', { class: 'label' }, '场景', scene.el)),
       confirmText: '新建',
       onConfirm: async () => {
         if (!name.value.trim()) { toast('请填写名称', 'error'); return false; }
+        const id = newId('k');
+        await saving('正在保存…', () => store.save(`新建清单模板：${name.value.trim()}`, (data) => {
+          data.lists = [...(data.lists || []), { id, name: name.value.trim(), scene: scene.get(), items: [], createdAt: today() }];
+        })).catch(() => {});
+        go(`#/list/${id}`);
+      },
+    });
+  };
+  return h('div', {},
+    header('清单模板', h('button', { class: 'small', onclick: create }, '新建')),
+    h('p', { class: 'muted small' }, '常用场景要带的东西存成模板（比如回家、返校）。出行时拿出来，扫一遍就知道带齐没有。'),
+    lists.length ? h('div', { class: 'group' }, lists.map((l) => cell({ href: `#/list/${l.id}`, ic: 'list', color: '#9a8c7a', title: l.name, meta: `${l.scene} · ${l.items.filter((id) => store.item(id)).length} 件` })))
+      : h('div', { class: 'card' }, h('p', {}, '还没有模板。也可以在一次出行结束后点「存成模板」。')));
+}
+
+function listView(id) {
+  const list = (store.data.lists || []).find((l) => l.id === id);
+  if (!list) return notFound('找不到这个模板。');
+  const items = list.items.map((x) => store.item(x)).filter(Boolean);
+  const save = (message, fn) => saving('正在保存…', () => store.save(message, (data) => {
+    const l = data.lists.find((x) => x.id === id);
+    if (!l) throw new Error('模板已经被删除了');
+    fn(l, data);
+  })).then(render).catch(() => {});
+  const addFromItems = () => {
+    const chosen = new Set();
+    const q = h('input', { type: 'search', placeholder: '搜索物品' });
+    const box = h('div', { class: 'pick-list' });
+    const draw = () => {
+      const w = q.value.trim().toLowerCase();
+      fill(box, store.data.items.filter((i) => !i.archived && !list.items.includes(i.id) && (!w || `${i.name} ${i.assetId}`.toLowerCase().includes(w)))
+        .slice(0, 80).map((i) => h('label', { class: 'check-row' },
+          h('input', { type: 'checkbox', checked: chosen.has(i.id), onchange: (e) => { if (e.target.checked) chosen.add(i.id); else chosen.delete(i.id); } }),
+          h('span', { class: 'grow' }, i.name, h('span', { class: 'muted small block' }, store.shortName(i.location))))));
+    };
+    q.addEventListener('input', draw);
+    draw();
+    openSheet({
+      title: '从物品里添加', body: h('div', {}, q, box), confirmText: '添加',
+      onConfirm: () => save(`模板「${list.name}」加 ${chosen.size} 件`, (l) => { l.items = [...new Set([...l.items, ...chosen])]; }),
+    });
+  };
+  const rename = () => {
+    const name = prompt('新名称：', list.name);
+    if (name?.trim()) save(`模板改名：${name.trim()}`, (l) => { l.name = name.trim(); });
+  };
+  const remove = () => {
+    if (!confirm(`删除模板「${list.name}」？（不影响物品）`)) return;
+    saving('正在删除…', () => store.save(`删除模板：${list.name}`, (data) => { data.lists = data.lists.filter((x) => x.id !== id); }))
+      .then(() => go('#/lists', true)).catch(() => {});
+  };
+  const useIt = () => { tripDraft.current = { kind: list.scene === '出差' ? '出差' : list.scene === '回家' ? '回家' : '其他', listId: id }; go('#/trip/new'); };
+  return h('div', {},
+    header(list.name, h('button', { class: 'link', onclick: rename }, '改名')),
+    h('p', { class: 'muted small' }, `${list.scene} · ${items.length} 件`),
+    h('div', { class: 'actions' },
+      h('button', { onclick: useIt }, '用它出行'),
+      h('button', { class: 'secondary', onclick: addFromItems }, '从物品里添加'),
+      h('a', { class: 'button secondary', href: `#/check/list/${id}` }, '扫码添加')),
+    items.length ? h('div', { class: 'card' }, items.map((it) => h('div', { class: 'check-item' },
+      h('a', { class: 'grow', href: `#/item/${it.id}` }, it.name, h('span', { class: 'muted small block' }, store.shortName(it.location))),
+      h('button', { class: 'link danger-text', onclick: () => save(`模板「${list.name}」去掉 ${it.name}`, (l) => { l.items = l.items.filter((x) => x !== it.id); }) }, '去掉'))))
+      : h('div', { class: 'card' }, h('p', {}, '模板是空的。')),
+    h('p', { class: 'center' }, h('button', { class: 'link danger-text', onclick: remove }, '删除这个模板')));
+}
+
+// ---------- 装箱：收纳袋、搬家箱子、行李箱 ----------
+
+function boxesView() {
+  const bags = store.data.locations.filter((l) => l.box === 'bag');
+  const boxes = store.data.locations.filter((l) => l.box === 'move');
+  const luggage = store.data.locations.filter((l) => l.box === 'trip');
+  const create = (kind) => {
+    const name = h('input', { value: kind === 'bag' ? '' : `箱子 ${boxes.length + 1}`, placeholder: kind === 'bag' ? '比如 洗漱包、衣物收纳袋' : '比如 箱子 1、书籍箱' });
+    const where = locationSelect('', {}, '平时放在哪');
+    openSheet({
+      title: kind === 'bag' ? '新建收纳袋' : '新建搬家箱子',
+      body: h('div', { class: 'form' }, h('label', {}, '名称', name), kind === 'bag' ? h('label', {}, '平时放在哪', where) : null,
+        h('p', { class: 'muted small' }, kind === 'bag'
+          ? '收纳袋会得到一个 010 开头的编号，贴上标签后，核对时扫一下袋子，里面登记的东西就全部算带上了。'
+          : '箱子会得到一个 010 开头的编号，标签进「待打印」。扫一下箱子就能看到里面装了什么。')),
+      confirmText: '新建',
+      onConfirm: async () => {
+        if (!name.value.trim()) { toast('请填写名称', 'error'); return false; }
+        if (kind === 'bag' && !where.value) { toast('请选择平时放在哪', 'error'); return false; }
         const id = newId('L');
-        await saving('正在保存…', () => store.save(`新建箱子：${name.value.trim()}`, (data) => {
-          data.locations.push({ id, name: name.value.trim(), parent: null, box: 'move',
+        await saving('正在保存…', () => store.save(`新建${kind === 'bag' ? '收纳袋' : '箱子'}：${name.value.trim()}`, (data) => {
+          data.locations.push({ id, name: name.value.trim(), parent: kind === 'bag' ? where.value : null, box: kind,
             assetId: nextAssetInPrefix(data, LOCATION_PREFIX), label: 'pending', createdAt: today() });
         })).catch(() => {});
         go(`#/place/${id}`);
       },
     });
   };
+  const rows = (list, ic) => h('div', { class: 'list' }, list.map((b) => h('a', { class: 'row place', href: `#/place/${b.id}` },
+    h('div', { class: 'row-main' },
+      h('div', { class: 'row-title' }, ic, ' ', b.name),
+      h('div', { class: 'row-meta' }, assetChip(b.assetId), labelChip(b), `${store.itemsIn(b.id).length} 件`,
+        b.box === 'bag' && b.parent ? `平时在${store.shortName(b.parent)}` : null)))));
   return h('div', {},
-    header('装箱', h('button', { class: 'small', onclick: create }, '新建箱子')),
-    h('p', { class: 'muted small' }, '搬家时：新建箱子 → 打开箱子点「扫码装箱」，逐个扫要装的东西 → 到了新地方，打开箱子把东西放到新柜子，或者一键放回原处。出差的行李箱在「出差 / 旅行」里自动建。'),
-    boxes.length ? h('div', { class: 'list' }, boxes.map((b) => h('a', { class: 'row place', href: `#/place/${b.id}` },
-      h('div', { class: 'row-main' },
-        h('div', { class: 'row-title' }, b.box === 'trip' ? '🧳 ' : '📦 ', b.name),
-        h('div', { class: 'row-meta' }, assetChip(b.assetId), labelChip(b), `${store.itemsIn(b.id).length} 件`)))))
-      : h('div', { class: 'card' }, h('p', {}, '现在没有箱子。')));
+    header('装箱 / 收纳袋'),
+    h('div', { class: 'section-title' }, '收纳袋（常驻，出行时整袋带走）'),
+    bags.length ? rows(bags, '👝') : h('p', { class: 'muted small' }, '还没有收纳袋。'),
+    h('button', { class: 'secondary', onclick: () => create('bag') }, '新建收纳袋'),
+    h('div', { class: 'section-title' }, '搬家箱子'),
+    boxes.length ? rows(boxes, '📦') : h('p', { class: 'muted small' }, '现在没有搬家箱子。'),
+    h('button', { class: 'secondary', onclick: () => create('move') }, '新建搬家箱子'),
+    luggage.length ? [h('div', { class: 'section-title' }, '行李箱（出行中，自动建的）'), rows(luggage, '🧳')] : null);
 }
 
-// 箱子页面上的操作（在 placeView 里调用）
+// 箱子、收纳袋页面上的操作（在 placeView 里调用）
 function boxPanel(loc, items) {
+  if (loc.box === 'bag') {
+    return h('div', { class: 'card' },
+      h('h3', {}, `收纳袋 · 平时在${store.shortName(loc.parent)}`),
+      h('p', { class: 'small' }, '登记袋子里装了什么。出行核对时扫一下袋子，里面的东西全部算带上了。'),
+      h('a', { class: 'button secondary', href: `#/check/bag/${loc.id}` }, '扫码登记袋子里的东西'),
+      h('p', { class: 'muted small' }, '也可以在物品的编辑页，把位置改成这个袋子。'));
+  }
   const backable = items.filter((i) => i.homeLocation && store.location(i.homeLocation));
   const target = locationSelect('', {}, '全部搬到……');
   const run = (message, fn) => saving('正在保存…', () => store.save(message, fn)).then(render).catch(() => {});
@@ -2263,38 +2494,91 @@ function boxPanel(loc, items) {
   return h('div', { class: 'card' },
     h('h3', {}, loc.box === 'trip' ? '行李箱' : '搬家箱子'),
     h('div', { class: 'actions' },
-      h('button', { onclick: scanInto }, '扫码装箱'),
+      loc.box === 'move' ? h('button', { onclick: scanInto }, '扫码装箱') : null,
+      items.length ? h('a', { class: 'button secondary', href: `#/check/box/${loc.id}` }, '核对拆箱') : null,
       backable.length ? h('button', { class: 'secondary', onclick: putBack }, `全部放回原处（${backable.length}）`) : null),
     items.length ? h('div', { class: 'asset-row' }, target, h('button', { class: 'secondary small', onclick: moveAll }, '搬过去')) : null,
-    h('p', { class: 'muted small' }, '单件拿出来：打开物品，编辑位置，或在扫码页用「整理」扫进新柜子。'),
     items.length ? null : h('button', { class: 'link danger-text', onclick: remove }, '删除这个箱子'));
 }
 
-// ---------- 出差 / 旅行 ----------
-
-function tripsView() {
-  const trips = [...store.data.trips].sort((a, b) => (b.start || '').localeCompare(a.start || ''));
-  const status = { planning: '准备中', packed: '在路上', done: '已结束' };
-  return h('div', {},
-    header('出差 / 旅行', h('button', { class: 'small', onclick: () => { tripDraft.current = null; go('#/trip/new'); } }, '新行程')),
-    trips.length ? h('div', { class: 'list' }, trips.map((t) => h('a', { class: 'row place', href: `#/trip/${t.id}` },
-      h('div', { class: 'row-main' },
-        h('div', { class: 'row-title' }, `${t.city} · ${t.start.slice(5)}～${t.end.slice(5)}`),
-        h('div', { class: 'row-meta' }, h('span', { class: `label-state ${t.status === 'packed' ? 'pending' : t.status === 'done' ? 'printed' : 'none'}` }, status[t.status]),
-          t.purposes.join('、'), `${(t.checked || []).length} 件`)))))
-      : h('div', { class: 'card' }, h('p', {}, '还没有行程。点「新行程」，填目的地、日期和目的，会根据天气和你的物品推荐带什么。')));
+// 核对页的路由：出发 / 回程 / 拆箱 / 模板扫码添加 / 收纳袋登记
+function checkRoute(kind, id, phase) {
+  if (kind === 'trip') {
+    const trip = store.data.trips.find((t) => t.id === id);
+    if (!trip) return notFound('找不到这次出行。');
+    return phase === 'back' ? backCheck(trip) : outCheck(trip);
+  }
+  if (kind === 'box') {
+    const loc = store.location(id);
+    if (!loc) return notFound('找不到这个箱子。');
+    return checkView({
+      key: `box-${id}`, title: `核对拆箱：${loc.name}`, sub: '把箱子里的东西逐件扫一遍，确认一件不少。', doneText: '已找到',
+      expected: store.itemsIn(id).map((i) => i.id), finishText: '核对完了',
+      onFinish: (done) => {
+        const missing = store.itemsIn(id).filter((i) => !done.has(i.id));
+        toast(missing.length ? `还差 ${missing.length} 件：${missing.map((i) => i.name).join('、')}` : '一件不少 ✓', missing.length ? 'error' : 'ok');
+        go(`#/place/${id}`, true);
+      },
+    });
+  }
+  if (kind === 'list') {
+    const list = (store.data.lists || []).find((l) => l.id === id);
+    if (!list) return notFound('找不到这个模板。');
+    return checkView({
+      key: `list-${id}`, title: `扫码添加：${list.name}`, sub: '对着实物逐件扫，扫到的加进模板；扫收纳袋会把袋子里的都加进来。',
+      expected: list.items, collect: true, doneText: '件在模板里', finishText: '保存模板',
+      onFinish: (done, added) => saving('正在保存…', () => store.save(`模板「${list.name}」扫码添加 ${added.length} 件`, (data) => {
+        const l = data.lists.find((x) => x.id === id);
+        l.items = [...new Set([...l.items, ...added])];
+      })).then(() => go(`#/list/${id}`, true)),
+    });
+  }
+  if (kind === 'bag') {
+    const bag = store.location(id);
+    if (!bag) return notFound('找不到这个收纳袋。');
+    return checkView({
+      key: `bag-${id}`, title: `登记：${bag.name}`, sub: '把要放进袋子的东西逐件扫一下。', collect: true,
+      expected: store.itemsIn(id).map((i) => i.id), doneText: '件在袋子里', finishText: '保存',
+      onFinish: (done, added) => saving('正在保存…', () => store.save(`收纳袋「${bag.name}」放进 ${added.length} 件`, (data) => {
+        for (const it of data.items) if (added.includes(it.id)) moveItem(data, it, id);
+      })).then(() => go(`#/place/${id}`, true)),
+    });
+  }
+  return notFound('没有这个页面');
 }
 
-const tripDraft = { current: null }; // 还没保存的新行程（生成推荐后先放这里）
+// ---------- 出行 ----------
+
+const TRIP_KINDS = ['出差', '回家', '其他'];
+const tripTitle = (t) => `${t.kind && t.kind !== '出差' ? `${t.kind === '回家' ? '回家' : t.city}` : t.city}${t.start ? ` · ${t.start.slice(5)}${t.end && t.end !== t.start ? `～${t.end.slice(5)}` : ''}` : ''}`;
+
+function tripsView() {
+  const trips = [...store.data.trips].sort((a, b) => (b.start || b.createdAt || '').localeCompare(a.start || a.createdAt || ''));
+  const status = { planning: '准备中', packed: '在路上', done: '已结束' };
+  return h('div', {},
+    header('出行', h('button', { class: 'small', onclick: () => { tripDraft.current = null; go('#/trip/new'); } }, '新出行')),
+    h('div', { class: 'group' }, cell({ href: '#/lists', ic: 'list', color: '#9a8c7a', title: '清单模板', meta: `${(store.data.lists || []).length} 个` })),
+    h('div', { class: 'section-title' }, '出行记录'),
+    trips.length ? h('div', { class: 'list' }, trips.map((t) => h('a', { class: 'row place', href: `#/trip/${t.id}` },
+      h('div', { class: 'row-main' },
+        h('div', { class: 'row-title' }, tripTitle(t)),
+        h('div', { class: 'row-meta' }, h('span', { class: `label-state ${t.status === 'packed' ? 'pending' : t.status === 'done' ? 'printed' : 'none'}` }, status[t.status]),
+          t.kind || '出差', (t.purposes || []).join('、'), `${(t.out || t.checked || []).length} 件`)))))
+      : h('div', { class: 'card' }, h('p', {}, '还没有出行记录。出差会按天气推荐带什么；回家、返校可以用清单模板。')));
+}
+
+const tripDraft = { current: null }; // 还没保存的新出行（生成清单后先放这里）
 
 function tripPlanView(id) {
   const saved = id ? store.data.trips.find((t) => t.id === id) : null;
-  if (id && !saved) return notFound('找不到这个行程。');
+  if (id && !saved) return notFound('找不到这次出行。');
   const trip = saved ? structuredClone(saved) : tripDraft.current;
   return trip?.plan ? tripResult(trip, Boolean(saved)) : tripForm(trip);
 }
 
 function tripForm(prev) {
+  const kind = chipChoice(TRIP_KINDS, prev?.kind || '出差');
+  const body = h('div', {});
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
   const city = h('input', { placeholder: '比如 上海、成都', value: prev?.city || '' });
   const start = h('input', { type: 'date', value: prev?.start || tomorrow });
@@ -2309,93 +2593,110 @@ function tripForm(prev) {
   const laundry = h('input', { type: 'checkbox', checked: Boolean(prev?.laundry) });
   const note = h('textarea', { rows: 2, placeholder: '比如 要见客户、可能去爬山、住朋友家' });
   if (prev?.note) note.value = prev.note;
+  const lists = store.data.lists || [];
+  const listSel = h('select', { value: prev?.listId || '' }, h('option', { value: '' }, '不用模板，自己挑'),
+    lists.map((l) => h('option', { value: l.id }, `${l.name}（${l.items.length} 件）`)));
   const ai = readAi();
 
   const generate = async () => {
-    if (!city.value.trim()) return toast('请填写目的地', 'error');
-    if (!start.value || !end.value || end.value < start.value) return toast('日期不对', 'error');
-    const trip = {
-      id: newId('t'), city: city.value.trim(), start: start.value, end: end.value,
-      purposes: [...purposes], laundry: laundry.checked, note: note.value.trim(), status: 'planning', createdAt: today(),
-    };
-    await saving('正在查天气…', async (b) => {
-      trip.place = await geocode(trip.city);
-      trip.weather = await weatherFor(trip.place, trip.start, trip.end);
-      const base = rulePlan(store.data, trip, trip.weather);
-      trip.plan = base;
-      if (ai.key) {
-        b.set('DeepSeek 正在挑东西、搭配衣服…（可能要一分钟）');
-        try {
-          trip.plan = await aiPlan(store.data, trip, trip.weather, base, ai);
-        } catch (e) {
-          trip.plan = { ...base, fallback: e.message };
+    const k = kind.get();
+    const base = { id: newId('t'), kind: k, start: start.value, end: end.value || start.value, status: 'planning', createdAt: today() };
+    if (k === '出差') {
+      if (!city.value.trim()) return toast('请填写目的地', 'error');
+      if (!start.value || !end.value || end.value < start.value) return toast('日期不对', 'error');
+      const trip = { ...base, city: city.value.trim(), purposes: [...purposes], laundry: laundry.checked, note: note.value.trim() };
+      await saving('正在查天气…', async (b) => {
+        trip.place = await geocode(trip.city);
+        trip.weather = await weatherFor(trip.place, trip.start, trip.end);
+        const rules = rulePlan(store.data, trip, trip.weather);
+        trip.plan = rules;
+        if (ai.key) {
+          b.set('DeepSeek 正在挑东西、搭配衣服…（可能要一分钟）');
+          try { trip.plan = await aiPlan(store.data, trip, trip.weather, rules, ai); } catch (e) { trip.plan = { ...rules, fallback: e.message }; }
         }
-      }
-      trip.checked = trip.plan.items.map((i) => i.id);
-    }).catch(() => { throw new Error('stop'); });
-    tripDraft.current = trip;
+        trip.checked = trip.plan.items.map((i) => i.id);
+      }).catch(() => { throw new Error('stop'); });
+      tripDraft.current = trip;
+    } else {
+      const list = lists.find((l) => l.id === listSel.value);
+      const ids = (list?.items || []).filter((id) => store.item(id) && !store.item(id).archived);
+      tripDraft.current = {
+        ...base, city: k === '回家' ? '家' : (city.value.trim() || '外出'), purposes: [], listId: list?.id || null,
+        plan: { source: list ? `模板「${list.name}」` : '自己挑', items: ids.map((id) => ({ id, qty: 1, reason: '' })), outfits: [], missing: [], tips: [] },
+        checked: ids,
+      };
+    }
     render();
   };
 
-  return h('div', { class: 'form' },
-    header('新行程'),
-    h('label', {}, '目的地', city),
-    h('div', { class: 'asset-row' }, h('label', { class: 'grow' }, '出发', start), h('label', { class: 'grow' }, '返回', end)),
-    h('div', { class: 'label' }, '目的（可多选）', chipBox),
-    h('label', { class: 'switch-row' }, laundry, '住处可以洗衣服'),
-    h('label', {}, '补充说明', note),
-    h('p', { class: 'muted small' }, ai.key ? '会用 DeepSeek 推荐并搭配衣服。' : '没填 DeepSeek 密钥，只用规则推荐。可以在「设置」里填密钥让推荐更聪明。'),
-    h('button', { class: 'wide', onclick: () => generate().catch(() => {}) }, '生成推荐'));
+  const draw = () => {
+    const k = kind.get();
+    fill(body, k === '出差' ? [
+      h('label', {}, '目的地', city),
+      h('div', { class: 'asset-row' }, h('label', { class: 'grow' }, '出发', start), h('label', { class: 'grow' }, '返回', end)),
+      h('div', { class: 'label' }, '目的（可多选）', chipBox),
+      h('label', { class: 'switch-row' }, laundry, '住处可以洗衣服'),
+      h('label', {}, '补充说明', note),
+      h('p', { class: 'muted small' }, ai.key ? '会用 DeepSeek 推荐并搭配衣服。' : '没填 DeepSeek 密钥，只用规则推荐。'),
+      h('button', { class: 'wide', onclick: () => generate().catch(() => {}) }, '生成推荐'),
+    ] : [
+      k === '其他' ? h('label', {}, '去哪', city) : null,
+      h('div', { class: 'asset-row' }, h('label', { class: 'grow' }, '出发', start), h('label', { class: 'grow' }, '回来（大概）', end)),
+      h('label', {}, '用哪个清单模板', listSel),
+      h('button', { class: 'wide', onclick: () => generate().catch(() => {}) }, '生成清单'),
+    ]);
+  };
+  kind.el.addEventListener('click', () => setTimeout(draw));
+  draw();
+  return h('div', { class: 'form' }, header('新出行'), h('div', { class: 'label' }, '类型', kind.el), body);
 }
 
 function tripResult(trip, isSaved) {
   const checked = new Set(trip.checked || []);
   const byId = (id) => store.item(id);
-  const w = summarizeWeather(trip.weather);
   const planItems = trip.plan.items.filter((i) => byId(i.id));
   const extra = (trip.checked || []).filter((id) => !planItems.some((p) => p.id === id) && byId(id)).map((id) => ({ id, qty: 1, reason: '自己加的' }));
-  const all = [...planItems, ...extra];
-  // 按现在放的位置分组，照着去柜子里拿
-  const groups = new Map();
-  for (const p of all) {
-    const key = store.shortName(byId(p.id).location);
+  const shown = trip.status === 'planning' ? [...planItems, ...extra] : (trip.out || trip.checked || []).filter(byId).map((id) => ({ id, qty: 1, reason: '' }));
+  const groups = new Map(); // 按位置分组，照着去柜子里拿
+  for (const p of shown) {
+    const key = store.shortName(byId(p.id).homeLocation && isBox(store.data, byId(p.id).location) ? byId(p.id).homeLocation : byId(p.id).location);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(p);
   }
-
-  const persist = (message, fn) => saving('正在保存…', () => store.save(message, (data) => {
+  const persist = (message, fn, then = `#/trip/${trip.id}`) => saving('正在保存…', () => store.save(message, (data) => {
     const i = data.trips.findIndex((t) => t.id === trip.id);
     const next = { ...trip, checked: [...checked] };
     fn?.(data, next);
     if (i < 0) data.trips.push(next); else data.trips[i] = next;
-  })).then(() => { tripDraft.current = null; go(`#/trip/${trip.id}`, true); }).catch(() => {});
+  })).then(() => { tripDraft.current = null; go(then, true); }).catch(() => {});
 
-  const pack = () => {
+  const directPack = () => {
     const ids = [...checked].filter((id) => byId(id) && !isBox(store.data, byId(id).location));
     if (!ids.length) return toast('没有勾选要带的东西', 'error');
-    if (!confirm(`把勾选的 ${ids.length} 件装进行李箱？\n它们的位置会临时变成「行李箱」，回来后可以一键放回原处。`)) return;
-    persist(`出发：${trip.city}，${ids.length} 件装进行李箱`, (data, next) => {
-      const boxId = newId('L');
-      data.locations.push({ id: boxId, name: `行李箱（${trip.city} ${trip.start.slice(5)}）`, parent: null, box: 'trip',
-        assetId: nextAssetInPrefix(data, LOCATION_PREFIX), label: 'none', createdAt: today() });
-      for (const it of data.items) if (ids.includes(it.id)) moveItem(data, it, boxId);
-      next.boxId = boxId;
-      next.status = 'packed';
-    });
+    if (!confirm(`不核对，直接把勾选的 ${ids.length} 件装进行李箱？`)) return;
+    persist(`出发：${trip.city}，${ids.length} 件装进行李箱`, (data, next) => packTrip(data, next, ids));
   };
-  const unpack = () => {
+  const directUnpack = () => {
     const inBox = trip.boxId ? store.itemsIn(trip.boxId) : [];
-    if (!confirm(`回来了？把行李箱里的 ${inBox.length} 件放回各自原来的位置。`)) return;
+    if (!confirm(`不核对，直接把行李箱里的 ${inBox.length} 件放回原处？`)) return;
     persist(`回来：${trip.city}，${inBox.length} 件放回原处`, (data, next) => {
       for (const it of data.items) if (it.location === trip.boxId) moveItem(data, it, it.homeLocation || it.location);
-      if (!data.items.some((it) => it.location === trip.boxId)) data.locations = data.locations.filter((l) => l.id !== trip.boxId);
+      dropEmptyBox(data, trip.boxId);
       next.status = 'done';
     });
   };
-  const again = () => { tripDraft.current = { ...trip, plan: null }; go('#/trip/new'); };
+  const saveAsList = () => {
+    const name = prompt('模板名称：', trip.kind === '回家' ? '回家' : trip.city);
+    if (!name?.trim()) return;
+    const ids = trip.out?.length ? trip.out : [...checked];
+    saving('正在保存…', () => store.save(`存成模板：${name.trim()}`, (data) => {
+      data.lists = [...(data.lists || []), { id: newId('k'), name: name.trim(), scene: trip.kind || '出差', items: ids, createdAt: today() }];
+    })).then(() => toast('已存成模板')).catch(() => {});
+  };
+  const again = () => { tripDraft.current = { ...trip, id: undefined, plan: null, status: 'planning' }; go('#/trip/new'); };
   const addSelect = h('select', {},
     h('option', { value: '' }, '再加一件……'),
-    store.data.items.filter((i) => !i.archived && !all.some((p) => p.id === i.id))
+    store.data.items.filter((i) => !i.archived && !shown.some((p) => p.id === i.id))
       .sort((a, b) => a.name.localeCompare(b.name, 'zh')).map((i) => h('option', { value: i.id }, `${i.name}（${store.shortName(i.location)}）`)));
   addSelect.addEventListener('change', () => {
     if (!addSelect.value) return;
@@ -2405,28 +2706,32 @@ function tripResult(trip, isSaved) {
     render();
   });
   const editable = trip.status === 'planning';
+  const w = trip.weather ? summarizeWeather(trip.weather) : null;
+  const left = (store.data.items || []).filter((i) => i.leftBehind?.trip === trip.id);
 
   return h('div', {},
-    header(`${trip.city} · ${trip.start.slice(5)}～${trip.end.slice(5)}`),
+    header(tripTitle(trip)),
     h('div', { class: 'card' },
-      h('p', {}, trip.purposes.join('、') || '未写目的', trip.laundry ? ' · 能洗衣服' : '', trip.note ? ` · ${trip.note}` : ''),
-      h('p', { class: 'muted small' }, `${trip.weather.source}：${w.min}～${w.max}℃，最大降水概率 ${w.rain}%${w.snow ? '，有雪' : ''}`),
-      trip.weather.days.length ? h('div', { class: 'weather-row' }, trip.weather.days.map((d) =>
-        h('span', { class: 'weather-day' }, h('b', {}, d.date.slice(5)), `${Math.round(d.min)}～${Math.round(d.max)}℃`, d.rain >= 40 ? ` ☂${d.rain}%` : ''))) : null,
-      h('p', { class: 'muted small' }, trip.plan.source === 'DeepSeek' ? '由 DeepSeek 推荐和搭配' : `规则推荐${trip.plan.fallback ? `（DeepSeek 没用上：${trip.plan.fallback}）` : ''}`)),
+      h('p', {}, trip.kind || '出差', (trip.purposes || []).length ? ` · ${trip.purposes.join('、')}` : '', trip.laundry ? ' · 能洗衣服' : '', trip.note ? ` · ${trip.note}` : ''),
+      w ? [h('p', { class: 'muted small' }, `${trip.weather.source}：${w.min}～${w.max}℃，最大降水概率 ${w.rain}%${w.snow ? '，有雪' : ''}`),
+        trip.weather.days.length ? h('div', { class: 'weather-row' }, trip.weather.days.map((d) =>
+          h('span', { class: 'weather-day' }, h('b', {}, d.date.slice(5)), `${Math.round(d.min)}～${Math.round(d.max)}℃`, d.rain >= 40 ? ` ☂${d.rain}%` : ''))) : null] : null,
+      h('p', { class: 'muted small' }, trip.plan.source === 'DeepSeek' ? '由 DeepSeek 推荐和搭配' : `清单来自：${trip.plan.source}${trip.plan.fallback ? `（DeepSeek 没用上：${trip.plan.fallback}）` : ''}`)),
+    trip.status === 'done' ? h('div', { class: 'banner' }, `出发带了 ${(trip.out || []).length} 件，回程找到 ${(trip.back || []).length} 件`, left.length ? `，落下 ${left.length} 件` : '') : null,
     trip.plan.tips?.length ? h('div', { class: 'card' }, h('h3', {}, '提醒'), h('ul', {}, trip.plan.tips.map((t) => h('li', {}, t)))) : null,
     h('div', { class: 'card' },
-      h('h3', {}, `要带的东西（${checked.size} 件，按位置分组）`),
+      h('h3', {}, trip.status === 'planning' ? `要带的东西（${checked.size} 件，按位置分组）` : `带走的东西（${shown.length} 件）`),
       [...groups.entries()].map(([place, list]) => [
         h('div', { class: 'group-title' }, place),
         list.map((p) => {
           const it = byId(p.id);
           return h('label', { class: 'check-row' },
-            h('input', {
-              type: 'checkbox', checked: checked.has(p.id), disabled: !editable,
+            editable ? h('input', {
+              type: 'checkbox', checked: checked.has(p.id),
               onchange: (e) => { if (e.target.checked) checked.add(p.id); else checked.delete(p.id); trip.checked = [...checked]; },
-            }),
-            h('span', { class: 'grow' }, it.name, p.qty > 1 ? ` ×${p.qty}` : '', h('span', { class: 'muted small block' }, p.reason)));
+            }) : null,
+            h('span', { class: 'grow' }, it.name, p.qty > 1 ? ` ×${p.qty}` : '', p.reason ? h('span', { class: 'muted small block' }, p.reason) : null,
+              it.leftBehind?.trip === trip.id ? h('span', { class: 'warn small block' }, `落在${it.leftBehind.place}了`) : null));
         })]),
       editable ? addSelect : null),
     trip.plan.outfits?.length ? h('div', { class: 'card' }, h('h3', {}, '每天穿搭'),
@@ -2436,15 +2741,100 @@ function tripResult(trip, isSaved) {
       h('ul', {}, trip.plan.missing.map((m) => h('li', {}, h('b', {}, m.name), m.reason ? `：${m.reason}` : '')))) : null,
     h('div', { class: 'actions' },
       trip.status === 'planning' ? [
-        h('button', { onclick: pack }, '装进行李箱'),
-        h('button', { class: 'secondary', onclick: () => persist(`保存行程：${trip.city}`) }, isSaved ? '保存勾选' : '先保存'),
-        h('button', { class: 'secondary', onclick: again }, '改条件重新推荐'),
+        h('button', { onclick: () => persist(`准备出行：${tripTitle(trip)}`, null, `#/check/trip/${trip.id}/out`) }, '开始出发核对'),
+        h('button', { class: 'secondary', onclick: directPack }, '不核对，直接出发'),
+        h('button', { class: 'secondary', onclick: () => persist(`保存出行：${tripTitle(trip)}`) }, isSaved ? '保存勾选' : '先保存'),
+        trip.kind === '出差' || !trip.kind ? h('button', { class: 'secondary', onclick: again }, '改条件重新推荐') : null,
       ] : null,
       trip.status === 'packed' ? [
+        h('a', { class: 'button', href: `#/check/trip/${trip.id}/back` }, '开始回程核对'),
         h('a', { class: 'button secondary', href: `#/place/${trip.boxId}` }, '看行李箱'),
-        h('button', { onclick: unpack }, '回来了，全部放回原处'),
+        h('button', { class: 'secondary', onclick: directUnpack }, '不核对，直接放回原处'),
       ] : null,
-      trip.status === 'done' ? h('button', { class: 'secondary', onclick: again }, '用同样的条件再推荐一次') : null));
+      trip.status === 'done' ? h('button', { class: 'secondary', onclick: again }, '再来一次') : null,
+      h('button', { class: 'secondary', onclick: saveAsList }, '存成模板')));
+}
+
+// 出发：带走的东西装进这次出行的行李箱（位置临时变成行李箱，记住原位置）
+function packTrip(data, trip, ids) {
+  const boxId = newId('L');
+  data.locations.push({ id: boxId, name: `行李箱（${trip.kind === '回家' ? '回家' : trip.city} ${(trip.start || today()).slice(5)}）`, parent: null, box: 'trip',
+    assetId: nextAssetInPrefix(data, LOCATION_PREFIX), label: 'none', createdAt: today() });
+  for (const it of data.items) if (ids.includes(it.id)) moveItem(data, it, boxId);
+  trip.boxId = boxId;
+  trip.out = ids;
+  trip.status = 'packed';
+}
+
+function dropEmptyBox(data, boxId) {
+  if (boxId && !data.items.some((it) => it.location === boxId)) data.locations = data.locations.filter((l) => l.id !== boxId);
+}
+
+function outCheck(trip) {
+  return checkView({
+    key: `trip-${trip.id}-out`, title: `出发核对：${tripTitle(trip)}`, doneText: '已带',
+    sub: '收拾的时候逐件扫；没标签的点 ✓；扫收纳袋 = 袋子里的都带了。',
+    expected: (trip.checked || []).filter((id) => store.item(id)), finishText: '出发',
+    onFinish: (done, added) => {
+      const planned = [...(trip.checked || []), ...added];
+      const notTaken = planned.filter((id) => !done.has(id) && store.item(id));
+      if (!done.size) { toast('还没确认任何东西', 'error'); throw new Error('empty'); }
+      if (notTaken.length && !confirm(`还有 ${notTaken.length} 件没确认：${notTaken.slice(0, 5).map((id) => store.item(id).name).join('、')}${notTaken.length > 5 ? '…' : ''}\n这些不带了？`)) throw new Error('cancel');
+      return saving('正在出发…', () => store.save(`出发：${tripTitle(trip)}，带 ${done.size} 件`, (data) => {
+        const t = data.trips.find((x) => x.id === trip.id);
+        t.checked = [...new Set(planned)];
+        packTrip(data, t, [...done]);
+      })).then(() => { toast(`出发！带了 ${done.size} 件`); go(`#/trip/${trip.id}`, true); });
+    },
+  });
+}
+
+function backCheck(trip) {
+  return checkView({
+    key: `trip-${trip.id}-back`, title: `回程核对：${tripTitle(trip)}`, doneText: '已找到',
+    sub: '回程前把出发时带的东西扫一遍，看看有没有落下。从那边新带回来的也可以扫进来。',
+    expected: (trip.out || []).filter((id) => store.item(id)), finishText: '核对完了',
+    onFinish: (done, added) => new Promise((resolve, reject) => {
+      const missing = (trip.out || []).filter((id) => store.item(id) && !done.has(id));
+      const newOnes = added.filter((id) => !(trip.out || []).includes(id));
+      const choices = new Map(missing.map((id) => [id, chipChoice(trip.kind === '回家' ? ['落下了', '留在家里', '其实没带'] : ['落下了', '其实没带'], '落下了')]));
+      const dest = locationSelect('', {}, '放到哪');
+      openSheet({
+        title: missing.length ? `还有 ${missing.length} 件没找到` : '都找到了 ✓',
+        body: h('div', { class: 'form' },
+          missing.map((id) => h('div', { class: 'label' }, store.item(id).name, choices.get(id).el)),
+          newOnes.length ? h('label', {}, `新带回来的 ${newOnes.length} 件放到`, dest) : null,
+          h('p', { class: 'muted small' }, '确认后：找到的放回原处；「落下了」的会在首页提醒你去找；「留在家里」的位置改成「家」。')),
+        confirmText: '到了，放回原处',
+        onConfirm: async () => {
+          if (newOnes.length && !dest.value) { toast('选一下新带回来的东西放哪', 'error'); return false; }
+          try {
+            await saving('正在放回原处…', () => store.save(`回程：${tripTitle(trip)}，找到 ${done.size} 件，没找到 ${missing.length} 件`, (data) => {
+              const t = data.trips.find((x) => x.id === trip.id);
+              for (const it of data.items) {
+                if (newOnes.includes(it.id)) { moveItem(data, it, dest.value); continue; }
+                if (!(trip.out || []).includes(it.id)) continue;
+                const back = it.homeLocation || it.location;
+                const choice = choices.get(it.id)?.get();
+                if (choice === '留在家里') {
+                  moveItem(data, it, ensureHome(data));
+                  it.notes = [it.notes, `${today()} 回家时留在家里了`].filter(Boolean).join('\n');
+                } else {
+                  if (isBox(data, it.location)) moveItem(data, it, back);
+                  if (choice === '落下了') it.leftBehind = { trip: trip.id, place: trip.kind === '回家' ? '家里' : trip.city, date: today() };
+                }
+              }
+              dropEmptyBox(data, t.boxId);
+              t.back = [...done];
+              t.status = 'done';
+            }));
+            go(`#/trip/${trip.id}`, true);
+            resolve();
+          } catch (e) { reject(e); }
+        },
+      });
+    }),
+  });
 }
 
 // ---------- 设置 ----------

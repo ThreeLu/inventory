@@ -135,7 +135,7 @@ class Ctx:
 def _(c):
     p = c.page
     c.go("#/settings")
-    p.evaluate(f"() => {{ localStorage.clear(); localStorage.setItem('inventory-api-base', '{API}'); }}")
+    p.evaluate(f"() => {{ localStorage.clear(); localStorage.setItem('inventory-api-base', '{API}'); localStorage.setItem('inventory-test-scan', '1'); }}")
     p.reload()
     p.get_by_label("数据仓库").fill(REPO)
     p.get_by_role("textbox", name="令牌", exact=True).fill("test-token")
@@ -292,7 +292,7 @@ def _(c):
 def _(c):
     p = c.page
     c.go("#/boxes")
-    p.get_by_role("button", name="新建箱子").click()
+    p.get_by_role("button", name="新建搬家箱子").click()
     p.locator(".sheet").get_by_role("button", name="新建").click()
     expect(p.get_by_role("heading", name="箱子 1")).to_be_visible()
     box = next(l for l in c.data()["locations"] if l.get("box") == "move")
@@ -325,7 +325,7 @@ def _(c):
     expect(p.get_by_role("textbox", name="API 密钥")).to_be_hidden()   # 已连接时收起
     assert "sk-test" not in c.repo.read("inventory.json").decode()
     c.go("#/trips")
-    p.get_by_role("button", name="新行程").click()
+    p.get_by_role("button", name="新出行").click()
     p.get_by_label("目的地").fill("上海")
     p.get_by_label("出发").fill(D(2))
     p.get_by_label("返回").fill(D(4))
@@ -336,8 +336,8 @@ def _(c):
     expect(p.get_by_text("转换插头")).to_be_visible()
     expect(p.locator(".check-row", has_text="不存在的东西")).to_have_count(0)   # AI 编的 id 被过滤
     p.screenshot(path=ART / "trip.png", full_page=True)
-    p.get_by_role("button", name="装进行李箱").click()
-    expect(p.get_by_role("button", name="回来了，全部放回原处")).to_be_visible()
+    p.get_by_role("button", name="不核对，直接出发").click()
+    expect(p.get_by_role("button", name="不核对，直接放回原处")).to_be_visible()
     d = c.data()
     trip = d["trips"][0]
     assert trip["status"] == "packed" and sorted(trip["checked"]) == ["iid", "iw1", "iw3"], trip
@@ -345,8 +345,8 @@ def _(c):
     c.go("#/")
     expect(p.locator(".cell", has_text="行李箱里还有东西")).to_contain_text("上海")
     c.go(f"#/trip/{trip['id']}")
-    p.get_by_role("button", name="回来了，全部放回原处").click()
-    expect(p.get_by_text("已结束").or_(p.get_by_role("button", name="用同样的条件再推荐一次"))).to_be_visible()
+    p.get_by_role("button", name="不核对，直接放回原处").click()
+    expect(p.get_by_role("button", name="再来一次")).to_be_visible()
     d = c.data()
     assert next(i for i in d["items"] if i["id"] == "iw1")["location"] == "Lward"
     assert not any(l["id"] == trip["boxId"] for l in d["locations"]), "空行李箱没删掉"
@@ -362,7 +362,7 @@ def _(c):
     expect(p.get_by_text("还没有填")).to_be_visible()
     assert "deepseek" not in json.loads(c.repo.read("config/ai.json"))
     c.go("#/trips")
-    p.get_by_role("button", name="新行程").click()
+    p.get_by_role("button", name="新出行").click()
     p.get_by_label("目的地").fill("哈尔滨")
     p.get_by_label("出发").fill(D(1))
     p.get_by_label("返回").fill(D(3))
@@ -470,6 +470,133 @@ def _(c):
     assert "laundry" not in w and w["wearsSinceWash"] == 0 and w["lastWashed"], w
     c.go("#/settings")
     expect(p.locator(".card", has_text="手机提醒")).to_be_visible()
+
+
+def scan(c, asset):
+    c.page.evaluate("code => window.__scan(code)", f"{URL}?a={asset}")
+
+
+def left_check(c):
+    c.page.wait_for_function("!location.hash.includes('/check/')", timeout=20000)
+
+
+@step("收纳袋：新建、扫码登记里面的东西")
+def _(c):
+    p = c.page
+    c.go("#/boxes")
+    p.get_by_role("button", name="新建收纳袋").click()
+    sh = p.locator(".sheet")
+    sh.get_by_label("名称").fill("洗漱包")
+    sh.get_by_label("平时放在哪").select_option(label="储物间 Storage Room")
+    sh.get_by_role("button", name="新建").click()
+    expect(p.get_by_role("heading", name="洗漱包")).to_be_visible()
+    p.get_by_role("link", name="扫码登记袋子里的东西").click()
+    expect(p.locator(".check-count")).to_contain_text("0")
+    scan(c, c.item("牙刷")["assetId"])
+    expect(p.locator(".check-count")).to_contain_text("1")
+    p.get_by_role("button", name="保存").click()
+    left_check(c)
+    bag = next(l for l in c.data()["locations"] if l["name"] == "洗漱包")
+    assert bag["box"] == "bag" and bag["parent"] == "Lstore" and bag["assetId"].startswith("010-"), bag
+    assert c.item("牙刷")["location"] == bag["id"], c.item("牙刷")
+    c.go("#/items?mode=place")
+    expect(p.locator(".row.place", has_text="洗漱包")).to_be_visible()   # 收纳袋显示在所在的柜子下面
+
+
+@step("清单模板：从物品勾选、扫码添加（扫袋子 = 加袋子里的）")
+def _(c):
+    p = c.page
+    c.go("#/lists")
+    p.get_by_role("button", name="新建", exact=True).click()
+    p.locator(".sheet").get_by_label("名称").fill("回家")
+    p.locator(".sheet").get_by_role("button", name="新建").click()
+    expect(p.get_by_role("heading", name="回家")).to_be_visible()
+    p.get_by_role("button", name="从物品里添加").click()
+    p.locator(".sheet input[type=search]").fill("身份证")
+    p.locator(".sheet .check-row", has_text="身份证").locator("input").check()
+    p.locator(".sheet").get_by_role("button", name="添加").click()
+    expect(p.locator(".check-item", has_text="身份证")).to_be_visible()
+    p.get_by_role("link", name="扫码添加").click()
+    expect(p.locator(".check-count")).to_be_visible()
+    scan(c, c.item("手机充电器")["assetId"])
+    bag = next(l for l in c.data()["locations"] if l["name"] == "洗漱包")
+    scan(c, bag["assetId"])
+    expect(p.locator(".check-count")).to_contain_text("3")
+    p.get_by_role("button", name="保存模板").click()
+    left_check(c)
+    expect(p.locator(".check-item")).to_have_count(3)
+
+
+@step("出行·回家：出发核对（扫码、收纳袋、清单外、不带的）→ 回程核对（落下了、留在家里）→ 找回来了")
+def _(c):
+    p = c.page
+    c.go("#/lists")
+    p.locator(".cell", has_text="回家").click()
+    p.get_by_role("button", name="用它出行").click()
+    expect(p.get_by_role("button", name="回家")).to_have_class("chip on")
+    p.get_by_role("button", name="生成清单").click()
+    p.get_by_role("button", name="开始出发核对").click()
+    expect(p.locator(".check-count")).to_contain_text("/ 3")
+    scan(c, c.item("身份证")["assetId"])
+    bag = next(l for l in c.data()["locations"] if l["name"] == "洗漱包")
+    scan(c, bag["assetId"])                                       # 牙刷在袋子里
+    scan(c, c.item("线性代数（第六版）")["assetId"])                 # 清单外 → 问要不要加
+    p.locator(".sheet").get_by_role("button", name="加进清单").click()
+    expect(p.locator(".check-count")).to_contain_text("3 / 4")
+    p.get_by_role("button", name="出发").click()                    # 充电器没确认 → 确认「不带了」
+    left_check(c)
+    expect(p.get_by_role("link", name="开始回程核对")).to_be_visible()
+    d = c.data()
+    trip = next(t for t in d["trips"] if t.get("kind") == "回家")
+    toothbrush = c.item("牙刷")
+    assert sorted(trip["out"]) == sorted([c.item("身份证")["id"], toothbrush["id"], c.item("线性代数（第六版）")["id"]]), trip
+    assert toothbrush["homeLocation"] == bag["id"], toothbrush       # 原位置是袋子
+    assert c.item("手机充电器")["location"] == "Ldrawer"             # 没带的留在原处
+    # 回程
+    p.get_by_role("link", name="开始回程核对").click()
+    expect(p.locator(".check-count")).to_contain_text("/ 3")
+    scan(c, c.item("身份证")["assetId"])
+    p.get_by_role("button", name="核对完了").click()
+    sh = p.locator(".sheet")
+    expect(sh).to_contain_text("还有 2 件没找到")
+    sh.locator(".label", has_text="牙刷").get_by_role("button", name="留在家里").click()
+    sh.get_by_role("button", name="到了，放回原处").click()
+    left_check(c)
+    expect(p.get_by_text("出发带了 3 件，回程找到 1 件，落下 1 件")).to_be_visible()
+    d = c.data()
+    home = next(l for l in d["locations"] if l.get("home"))
+    assert c.item("身份证")["location"] == "Ldrawer"
+    assert c.item("牙刷")["location"] == home["id"] and "homeLocation" not in c.item("牙刷")
+    book = c.item("线性代数（第六版）")
+    assert book["location"] == "Ldrawer" and book["leftBehind"]["place"] == "家里", book
+    assert not any(l.get("box") == "trip" for l in d["locations"]), "空行李箱没删掉"
+    c.go("#/")
+    p.locator(".cell", has_text="落在外面了").click()
+    p.get_by_role("button", name="找回来了").click()
+    expect(p.get_by_text("落在家里了")).to_have_count(0)
+    assert "leftBehind" not in c.item("线性代数（第六版）")
+
+
+@step("搬家箱子：扫码核对拆箱")
+def _(c):
+    p = c.page
+    c.go("#/boxes")
+    p.get_by_role("button", name="新建搬家箱子").click()
+    p.locator(".sheet").get_by_role("button", name="新建").click()
+    expect(p.get_by_role("heading", name="箱子 2")).to_be_visible()
+    box = next(l for l in c.data()["locations"] if l.get("box") == "move" and l["name"] != "箱子 1")
+    for name in ["手机充电器", "身份证"]:
+        c.go(f"#/item/{c.item(name)['id']}/edit")
+        p.get_by_label("位置").select_option(label=box["name"])
+        p.get_by_role("button", name="保存", exact=True).click()
+        c.wait_item(name)
+    c.go(f"#/place/{box['id']}")
+    p.get_by_role("link", name="核对拆箱").click()
+    expect(p.locator(".check-count")).to_be_visible()
+    scan(c, c.item("手机充电器")["assetId"])
+    expect(p.locator(".check-count")).to_contain_text("1 / 2")
+    p.get_by_role("button", name="核对完了").click()
+    expect(p.locator(".toast", has_text="还差 1 件：身份证")).to_be_visible()
 
 
 @step("AI 补全：只填名称，推荐类别和字段")

@@ -47,7 +47,8 @@ export function itemLine(data, item, { extra = false } = {}) {
     item.archived ? `已归档(${item.archiveReason || ''})` : '',
     item.consumable && Number(item.quantity) === 0 ? '已用完' : '',
     item.borrow ? `借阅中,应还${item.borrow.due}` : '',
-    loc?.box ? '在箱子里' : '',
+    loc?.box === 'move' || loc?.box === 'trip' ? '在箱子/行李箱里' : '',
+    item.leftBehind ? `落在${item.leftBehind.place}了` : '',
   ].filter(Boolean).join(',');
   const parts = [item.id, item.assetId || '-', item.name, item.tags[0] || '无类别', loc ? loc.name.split(' ')[0] : '-',
     `×${item.quantity}`, fields || '-', status || '-'];

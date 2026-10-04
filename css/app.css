@@ -355,3 +355,16 @@ p.error { color: var(--danger); }
 .rule-grid input { min-height: 38px; }
 
 [hidden] { display: none !important; }
+
+/* 扫码核对 */
+.scan-box.short { aspect-ratio: 16 / 9; }
+.scan-flash { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); background: var(--accent); color: var(--accent-text); padding: 6px 14px; border-radius: 999px; font-weight: 600; font-size: 15px; white-space: nowrap; }
+.check-progress { margin: 6px 0 4px; }
+.check-count { font-size: 15px; margin-bottom: 6px; }
+.check-count b { font-size: 26px; font-variant-numeric: tabular-nums; }
+.check-item { display: flex; align-items: center; gap: 10px; min-height: 48px; border-bottom: 0.5px solid var(--line); }
+.check-item:last-child { border-bottom: 0; }
+.check-item .grow { color: var(--text); }
+.pick-list { max-height: 50vh; overflow-y: auto; margin-top: 8px; }
+
+[hidden] { display: none !important; }

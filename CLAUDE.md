@@ -49,7 +49,7 @@
 
 - 无印良品的生成り底色 + 苹果的系统字体、大标题、分组列表、毛玻璃底部导航，主色藤紫 `#7a68b0`（深色 `#b4a6e3`）。颜色都在 `css/app.css` 的 `:root` 里。图标是 `js/icons.js` 的细线 SVG。
 - 底部五栏：今天（首页：今天穿什么、问一问、需要注意）/ 物品（照片目录，默认；按位置；列表）/ ＋（新建、扫码、问一问）/ 衣橱（今天穿什么、穿着记录、出差、换季）/ 我的（标签、借阅、装箱、提醒、补货、统计、管理、设置）。
-- 暂缓、等和用户细聊的：扫码（保持现状）、购物清单、断舍离。
+- 暂缓、等和用户细聊的：购物清单、断舍离。
 
 ## AI 功能（都走 `js/ai.js` 的 `askJson`）
 
@@ -65,6 +65,14 @@
 - 内衣、袜子（部位）每天洗：穿过就 `washing + autoReturn 明天`，`migrate()` 到期自动清掉，不参与搭配。
 - 攒够件数或放太久、床上用品超过周期 → 首页和晚上推送提醒。分批：单独洗或送洗 / 床品 / 浅色 / 深色 / 彩色。
 - 推送：`sw.js` + `js/push.js` 订阅，订阅存数据仓库 `config/push.json`；数据仓库 `.github/workflows/laundry.yml` 每天 12:00 UTC（北京 20 点）用 secret `VAPID_PRIVATE_KEY` 发送（`laundry_push.py`，规则和网页一致）。VAPID 联系方式用网址，不用用户邮箱。
+
+## 扫码核对（出行、拆箱、模板、收纳袋）
+
+- 通用核对页 `checkView(cfg)`：连续扫码打勾、手动 ✓、扫收纳袋 = 袋子里的全部；清单外的问要不要加（`collect` 模式直接加）。进度存在设备 localStorage（`inventory-check-*`），完成后清掉。路由 `#/check/(trip|box|list|bag)/:id[/out|back]`。
+- 测试没有摄像头：`localStorage['inventory-test-scan']` 打开后，`window.__scan(code)` 直接喂扫码内容。真摄像头用假视频本地测。
+- 出行（原「出差/旅行」）：`trip.kind` 出差/回家/其他；`checked` 计划、`out` 出发带走（装进行李箱，记 homeLocation）、`back` 回程找到。回程没找到的：落下了（`item.leftBehind`，首页提醒，找回来了/找不到了→归档丢失）、留在家里（位置改成「家」，`ensureHome`）、其实没带。
+- 清单模板 `data.lists = [{id,name,scene,items}]`：从物品勾选、扫码添加、出行「存成模板」。
+- 收纳袋：位置 `box: 'bag'`，常驻、`parent` 是平时放的柜子，里面的东西算在家（`isBox` 只认 move/trip）。行李箱装走时 homeLocation 是袋子，回来放回袋子。
 
 ## 其他功能速记
 
