@@ -398,8 +398,11 @@ def fake_externals(page):
                         {"id": "iid", "qty": 1, "reason": "必带"}, {"id": "不存在的东西", "qty": 1, "reason": "AI 编的"}],
               "outfits": [{"day": D(2)[5:], "items": ["iw3", "iw1"], "note": "灰配黑"}],
               "missing": [{"name": "转换插头", "reason": "酒店插座"}], "tips": ["带伞"]}
-    page.route("https://api.deepseek.com/**", lambda r: r.fulfill(json={
-        "choices": [{"message": {"content": json.dumps(answer, ensure_ascii=False)}}]}))
+    def deepseek(route):
+        if route.request.url.endswith("/models"):
+            return route.fulfill(json={"data": [{"id": "deepseek-flash"}, {"id": "deepseek-v4-pro"}]})
+        route.fulfill(json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(answer, ensure_ascii=False)}}]})
+    page.route("https://api.deepseek.com/**", deepseek)
 
 
 def main():

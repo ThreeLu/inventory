@@ -176,18 +176,19 @@ export async function aiPlan(data, trip, weather, base, { key, model }) {
   ].join('\n');
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 90000);
+  const timer = setTimeout(() => ctrl.abort(), 150000); // 会先思考再回答的模型（如 deepseek-flash）比较慢
   let res;
   try {
     res = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST', signal: ctrl.signal,
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: model || 'deepseek-chat',
+        model: model || 'deepseek-flash',
         messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
         response_format: { type: 'json_object' },
         temperature: 0.6,
-        max_tokens: 3000,
+        // 思考过程也算在这个上限里；给少了正文会被截断
+        max_tokens: 8000,
       }),
     });
   } catch (e) {
@@ -199,7 +200,10 @@ export async function aiPlan(data, trip, weather, base, { key, model }) {
     const msg = { 401: 'DeepSeek 密钥不对', 402: 'DeepSeek 余额不足', 429: 'DeepSeek 请求太频繁' }[res.status];
     throw new Error(msg || `DeepSeek 返回 ${res.status}`);
   }
-  const out = JSON.parse((await res.json()).choices[0].message.content);
+  const choice = (await res.json()).choices?.[0];
+  if (choice?.finish_reason === 'length') throw new Error('DeepSeek 想得太久，回答被截断了');
+  let out;
+  try { out = JSON.parse(choice.message.content); } catch { throw new Error('DeepSeek 的回答格式不对'); }
   // 只保留真实存在的物品 id，防止 AI 编造
   const valid = new Set(pool.map((i) => i.id));
   const seen = new Set();

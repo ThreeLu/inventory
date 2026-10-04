@@ -1588,7 +1588,7 @@ function tripForm(prev) {
       const base = rulePlan(store.data, trip, trip.weather);
       trip.plan = base;
       if (ai.key) {
-        b.set('DeepSeek 正在挑东西、搭配衣服…（可能要半分钟）');
+        b.set('DeepSeek 正在挑东西、搭配衣服…（可能要一分钟）');
         try {
           trip.plan = await aiPlan(store.data, trip, trip.weather, base, ai);
         } catch (e) {
@@ -1720,15 +1720,19 @@ function settingsView() {
   const ai = store?.data ? readAi() : readLocalAi();
   const inRepo = Boolean(store?.config?.deepseek?.key);
   const aiKey = h('input', { type: 'password', value: ai.key || '', placeholder: 'sk-…', autocomplete: 'off' });
-  const aiModel = h('input', { value: ai.model || 'deepseek-chat' });
+  const aiModel = h('input', { value: ai.model || '', placeholder: '留空自动选' });
   const saveAi = async () => {
     if (!store?.data) return toast('先连接数据仓库', 'error');
-    const next = { key: aiKey.value.trim(), model: aiModel.value.trim() || 'deepseek-chat' };
+    const next = { key: aiKey.value.trim(), model: aiModel.value.trim() };
     if (next.key) {
-      // 列模型的接口不花钱，用来验证密钥
+      // 列模型的接口不花钱，用来验证密钥；填的模型这个账号用不了（或没填）就自动选一个能用的
       const res = await fetch('https://api.deepseek.com/models', { headers: { Authorization: `Bearer ${next.key}` } }).catch(() => null);
       if (!res) return toast('连不上 DeepSeek', 'error');
       if (!res.ok) return toast(res.status === 401 ? 'DeepSeek 密钥不对' : `DeepSeek 返回 ${res.status}`, 'error');
+      const models = ((await res.json()).data || []).map((m) => m.id);
+      if (models.length && !models.includes(next.model)) {
+        next.model = models.find((m) => /flash|chat/.test(m)) || models[0];
+      }
     }
     const config = { ...(store.config || {}) };
     if (next.key) config.deepseek = next; else delete config.deepseek;
@@ -1797,7 +1801,7 @@ function aiCard(inRepo, ai, aiKey, aiModel, saveAi) {
   if (inRepo) {
     return h('div', { class: 'card' },
       h('h3', {}, 'AI'),
-      h('p', { class: 'small' }, `✓ 已连接 DeepSeek（${ai.model || 'deepseek-chat'}），出差推荐等 AI 功能会自动使用。`),
+      h('p', { class: 'small' }, `✓ 已连接 DeepSeek（${ai.model || '自动'}），出差推荐等 AI 功能会自动使用。`),
       h('details', { class: 'plain' }, h('summary', {}, '更换或删除密钥'), form));
   }
   return h('div', { class: 'card' },
