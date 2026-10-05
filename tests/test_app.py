@@ -1071,6 +1071,20 @@ def _(c):
     p.reload()
     expect(p.locator(".belt-banner")).to_contain_text("「黑色腰带」已经连着系了 6 天")
     expect(p.locator(".belt-line")).to_contain_text("黑色腰带 累 6/7")
+    # 同一种腰带两条（数量 ×2）：按「正在系的 / 歇着的」算，换好了点一下
+    d = c.data()
+    d["items"] = [i for i in d["items"] if i["id"] not in ("ibelt1", "ibelt2")]
+    d["items"].append({**belt, "id": "ibelt", "name": "腰带", "tags": ["衣服"], "quantity": 2, "fields": {"部位": "配饰"},
+                       "worn": [D(-20)] + days(6, 1), "beltSwaps": [{"date": D(-21), "to": 1}, {"date": D(-19), "to": 0}], "label": "none"})
+    c.repo.external_write("inventory.json", json.dumps(d, ensure_ascii=False).encode())
+    p.reload()
+    expect(p.locator(".belt-banner")).to_contain_text("「腰带」正在系的这条已经连着系了 6 天")
+    expect(p.locator(".belt-line")).to_contain_text("腰带（正在系的） 累 6/7")
+    p.locator(".belt-banner").get_by_role("button", name="换好了").click()
+    expect(p.get_by_text("今天起系的是另一条")).to_be_visible()
+    expect(p.locator(".belt-banner")).to_have_count(0)
+    expect(p.locator(".belt-line")).to_contain_text("腰带（歇着的） 累 6/7")
+    assert c.item("腰带")["beltSwaps"][-1] == {"date": D(0), "to": 1}
 
 
 def main():

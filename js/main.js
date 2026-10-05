@@ -9,7 +9,7 @@ import {
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
-import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles, thickOptions, beltAdvice, isBelt, beltFatigue, BELT_TIRED } from './outfit.js';
+import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles, thickOptions, beltAdvice, isBelt, beltLabel, BELT_TIRED } from './outfit.js';
 import { seasonPlan, storageFor, currentTerm, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
@@ -665,7 +665,10 @@ function itemView(id) {
         field('型号', item.modelNumber),
         field('序列号', item.serialNumber),
         field('购买日期', item.purchaseDate),
-        isBelt(item) ? (() => { const f = beltFatigue(item); return field('腰带疲劳', f.last ? `${f.score}/${BELT_TIRED}（系一天 +1，歇一天 −0.5，到 ${BELT_TIRED} 提醒换）` : '还没系过'); })() : null,
+        isBelt(item) ? (() => {
+          const xs = (beltAdvice({ items: [item] })?.belts || []);
+          return field('腰带疲劳', `${xs.map((x) => `${xs.length > 1 ? `${beltLabel(x).replace(item.name, '').replace(/[（）]/g, '')} ` : ''}${x.score}/${BELT_TIRED}`).join('，')}（系一天 +1，歇一天 −0.5，到 ${BELT_TIRED} 提醒换）`);
+        })() : null,
         (() => { const c = costPerWear(item); return c ? field('穿一次', c.wears ? `¥${c.each}（穿了 ${c.wears} 次）` : '还没记过穿它') : null; })(),
         (() => { const u = item.consumable ? usageRate(store.data, item) : null; return u ? field('多久买一次', `平均 ${u.every} 天，下次大概 ${u.next.slice(5)}`) : null; })(),
         field('价格', item.purchasePrice != null && item.purchasePrice !== '' ? `¥${item.purchasePrice}` : null),
@@ -1558,7 +1561,12 @@ function outfitView(q = {}) {
   const recommended = new Set((o?.options || []).flatMap((opt) => opt.items));
   // 腰带轮换：正在系的那条累了就提醒换，该换的那条标「推荐」
   const belt = beltAdvice(store.data);
-  if (belt?.swap) recommended.add(belt.swap.b.id);
+  const sameKind = belt?.swap && belt.swap.b === belt.current.b; // 同一种的两条：换成柜子里那条
+  if (belt?.swap && !sameKind) recommended.add(belt.swap.b.id);
+  const swapped = () => saveUndoable(`换腰带：${belt.swap.b.name}`, (data) => {
+    const it = data.items.find((i) => i.id === belt.swap.b.id);
+    it.beltSwaps = [...(it.beltSwaps || []).filter((x) => x.date !== todayStr()), { date: todayStr(), to: belt.swap.unit }].slice(-30);
+  }, '好，今天起系的是另一条').then(render).catch(() => {});
   const already = wornToday().map((i) => i.id);
   const picked = new Set(already);
   const pool = [...wearable(store.data), ...wornToday().filter((i) => !wearable(store.data).includes(i))];
@@ -1582,10 +1590,12 @@ function outfitView(q = {}) {
     h('div', { class: 'eyebrow' }, already.length ? '今天穿的（可以改）' : '今天穿什么，点选'),
     h('p', { class: 'why' }, '标「推荐」的是 AI 推荐过的，穿哪件你自己点。'),
     belt?.swap ? h('div', { class: 'banner soon belt-banner' },
-      `「${belt.current.b.name}」已经连着系了 ${belt.current.streak} 天，该歇歇了，今天换「${belt.swap.b.name}」吧`,
-      belt.swap.last ? `（它歇了 ${belt.swap.rested} 天）` : '') : null,
+      sameKind
+        ? h('span', {}, `「${belt.current.b.name}」正在系的这条已经连着系了 ${belt.current.streak} 天，该歇歇了，今天换柜子里歇着的那条吧${belt.swap.last ? `（它歇了 ${belt.swap.rested} 天）` : ''}。`)
+        : h('span', {}, `「${belt.current.b.name}」已经连着系了 ${belt.current.streak} 天，该歇歇了，今天换「${belt.swap.b.name}」吧${belt.swap.last ? `（它歇了 ${belt.swap.rested} 天）` : ''}。`),
+      sameKind ? h('button', { class: 'small', onclick: swapped }, '换好了') : null) : null,
     belt && belt.belts.length > 1 ? h('p', { class: 'muted small belt-line' }, '腰带：',
-      belt.belts.map((x) => `${x.b.name} 累 ${x.score}/${BELT_TIRED}`).join(' · ')) : null,
+      belt.belts.map((x) => `${beltLabel(x)} 累 ${x.score}/${BELT_TIRED}`).join(' · ')) : null,
     pickBox);
   if (q.pick) setTimeout(() => pickCard.scrollIntoView({ block: 'start' }), 50);
 

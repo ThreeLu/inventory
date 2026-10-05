@@ -197,7 +197,10 @@ const shiftDay = (d, n) => {
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
 };
 export function beltFatigue(item, today = todayStr()) {
-  const worn = new Set((item.worn || []).filter((d) => d <= today));
+  return fatigueOf(item.worn || [], today);
+}
+function fatigueOf(dates0, today) {
+  const worn = new Set(dates0.filter((d) => d <= today));
   const dates = [...worn].sort();
   if (!dates.length) return { score: 0, streak: 0, last: null, rested: null };
   let score = 0;
@@ -210,11 +213,30 @@ export function beltFatigue(item, today = todayStr()) {
   for (let d = last; worn.has(d); d = shiftDay(d, -1)) streak += 1; // 最近一次连着系了几天
   return { score, streak, last, rested: Math.round((new Date(`${today}T00:00:00`) - new Date(`${last}T00:00:00`)) / 86400000) };
 }
-// { belts: [{ b, score, streak, last, rested }], current, swap }：current 是最近系的那条；它累到 7 分、又有歇得更好的，swap 就是该换的那条
+// 同一种腰带有好几条（数量 ×2）：一模一样分不出来，就按「正在系的」和「柜子里歇着的」算。
+// item.beltSwaps = [{ date, to }] 记哪天换成了第几条；某天系的算在那天正在用的那条上（没换过就是第 0 条）。
+export function beltUnit(item, day) {
+  let u = 0;
+  for (const s of item.beltSwaps || []) if (s.date <= day) u = s.to;
+  return u;
+}
+function beltEntries(item, today) {
+  const n = Math.max(1, Math.floor(Number(item.quantity) || 1));
+  if (n < 2) return [{ b: item, unit: null, active: true, ...fatigueOf(item.worn || [], today) }];
+  const cur = beltUnit(item, today);
+  return Array.from({ length: n }, (_, u) => ({
+    b: item, unit: u, active: u === cur,
+    ...fatigueOf((item.worn || []).filter((d) => beltUnit(item, d) === u), today),
+  }));
+}
+export const beltLabel = (x) => (x.unit === null ? x.b.name : `${x.b.name}（${x.active ? '正在系的' : '歇着的'}${x.b.quantity > 2 ? ` ${x.unit + 1} 号` : ''}）`);
+
+// { belts: [{ b, unit, active, score, streak, last, rested }], current, swap }：current 是最近系的那条；
+// 它今天再系就到 7 分、又有歇得更好的，swap 就是该换的那条（同一种的另一条，或者别的腰带）
 export function beltAdvice(data, today = todayStr()) {
-  const belts = data.items.filter((i) => isBelt(i) && !i.archived).map((b) => ({ b, ...beltFatigue(b, today) }));
+  const belts = data.items.filter((i) => isBelt(i) && !i.archived).flatMap((b) => beltEntries(b, today));
   if (!belts.length) return null;
-  const current = belts.filter((x) => x.last).sort((a, b) => b.last.localeCompare(a.last))[0] || null;
+  const current = belts.filter((x) => x.active && x.last).sort((a, b) => b.last.localeCompare(a.last))[0] || null;
   const others = belts.filter((x) => x !== current).sort((a, b) => a.score - b.score);
   // 今天还没系的话按「今天再系一天」算：第 7 天早上点开就提醒，不用等系满了才说
   const projected = current ? current.score + (current.last === today ? 0 : 1) : 0;
