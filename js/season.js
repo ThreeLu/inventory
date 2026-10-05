@@ -49,9 +49,17 @@ export function seasonPlan(data, date = new Date()) {
   };
 }
 
-// 收起来的衣服默认放哪：夏装 → 夏季衣物柜，其他 → 储物间
+// 收起来的衣服默认放哪：夏装 → 夏季衣物柜；冬装 → 冬装柜，冬天的小件（配饰、贴身的秋衣袜子）→ 冬季衣物与小件服饰柜；其他 → 储物间
+const SMALL_PARTS = ['配饰', '内衣', '袜子'];
 export function storageFor(data, item) {
-  const summer = data.locations.find((l) => l.name.startsWith('夏季衣物'));
-  const store = data.locations.find((l) => l.name.startsWith('储物间'));
-  return ((item.fields?.['季节'] || '').includes('夏') ? summer : store) || store || summer;
+  const find = (prefix) => data.locations.find((l) => l.name.startsWith(prefix));
+  const store = find('储物间');
+  const season = item.fields?.['季节'] || '';
+  if (season.includes('夏')) return find('夏季衣物') || store;
+  if (season.includes('冬')) {
+    const small = find('冬季衣物');
+    const big = find('冬装柜');
+    return (SMALL_PARTS.includes(item.fields?.['部位']) ? small || big : big || small) || store;
+  }
+  return store || find('夏季衣物');
 }
