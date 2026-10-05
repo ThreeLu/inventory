@@ -9,7 +9,7 @@ import {
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
-import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay } from './outfit.js';
+import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles } from './outfit.js';
 import { seasonPlan, storageFor, currentTerm, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
@@ -1427,7 +1427,7 @@ async function generateOutfit({ schedule, note } = {}) {
   if (outfitState.generating) return outfitState.generating;
   outfitState.generating = (async () => {
     const prev = todaysOutfit();
-    schedule ||= prev?.schedule || [new Date().getDay() % 6 === 0 ? '宅宿舍' : '上课'];
+    schedule ||= prev?.schedule || [new Date().getDay() % 6 === 0 ? '宅宿舍' : '上班'];
     note ??= prev?.note || '';
     let w = null;
     try { w = await getWeather(); } catch { /* 没天气也能按季节挑 */ }
@@ -1437,8 +1437,8 @@ async function generateOutfit({ schedule, note } = {}) {
     if (ai.key) {
       try { plan = await aiOutfits(ai, store.data, w, schedule, note); } catch (e) { fallback = e.message; }
     }
-    plan ||= ruleOutfit(store.data, w);
-    if (!plan) return null;
+    // 一套都挑不出来（比如宅宿舍但还没有居家的衣服）也存下来，首页显示原因，不会反复重新生成
+    plan ||= ruleOutfit(store.data, w, schedule) || { source: '规则', options: [] };
     const record = { date: todayStr(), schedule, note, weather: w, ...plan, fallback, chosen: null };
     await store.save(`今天穿什么：${schedule.join('、')}`, (data) => { data.outfit = record; });
     outfitState.option = 0;
@@ -1510,6 +1510,13 @@ function outfitCard() {
       .catch((e) => { card.querySelector('.why').textContent = `没生成出来：${e.message}`; });
     return card;
   }
+  if (!o.options.length) {
+    const homeOnly = dayStyles(o.schedule || []).home && !dayStyles(o.schedule || []).main.length;
+    card.append(h('h2', {}, '没凑出合适的一套'),
+      h('p', { class: 'why' }, homeOnly ? '今天宅宿舍，但还没有居家的衣服：给睡衣这类的「风格」选「居家」就能推荐了。' : '能穿的衣服里凑不出一整套（可能都在洗，或者季节不合适）。'),
+      h('a', { class: 'button secondary wide', href: '#/outfit' }, '换个安排'));
+    return card;
+  }
   const idx = Math.min(outfitState.option, o.options.length - 1);
   const opt = o.options[idx];
   const next = () => { outfitState.option = (idx + 1) % o.options.length; render(); };
@@ -1527,7 +1534,7 @@ const PICK_PARTS = ['上衣', '下装', '外套', '鞋', '配饰'];
 
 function outfitView(q = {}) {
   const o = todaysOutfit();
-  const schedule = new Set(o?.schedule || ['上课']);
+  const schedule = new Set(o?.schedule || ['上班']);
   const chipBox = h('div', { class: 'chips' });
   const draw = () => chipBox.replaceChildren(...SCHEDULES.map((s) => h('button', {
     type: 'button', class: `chip${schedule.has(s) ? ' on' : ''}`,

@@ -1000,6 +1000,33 @@ def _(c):
     assert " · " in c.repo.commits[c.repo.head]["message"]  # 网页提交的说明带上了设备名
 
 
+@step("今天穿什么分四类：运动只在跑步、居家只在宅宿舍、休闲爬山、正式上班；DeepSeek 混进来的也去掉")
+def _(c):
+    p = c.page
+    c.go("#/")
+    out = p.evaluate("""async () => {
+      const { ruleOutfit, styleOf, dayStyles } = await import('./js/outfit.js');
+      const I = (id, name, part, style, tag = '衣服') => ({ id, name, tags: [tag], fields: { 部位: part, 季节: '春秋', ...(style ? { 风格: style } : {}) } });
+      const data = { locations: [], items: [
+        I('f1', '黑色衬衫', '上衣', '正式'), I('f2', '黑色西裤', '下装', ''), I('f3', '皮鞋', '鞋', '正式', '鞋'),
+        I('c1', '格子衬衫', '上衣', '休闲'), I('c2', '工装裤', '下装', '休闲'), I('c3', '登山鞋', '鞋', '休闲', '鞋'),
+        I('r1', '蓝色长袖运动上衣', '上衣', '', '运动服'), I('r2', '黑色运动裤子', '下装', ''), I('r3', '白色运动鞋', '鞋', '', '鞋'),
+        I('h1', '睡衣', '上衣', '休闲'), I('h2', '珊瑚绒裤', '下装', '居家'), I('l1', '秋衣', '上衣', ''),
+      ] };
+      const w = { min: 5, max: 15 };
+      const plan = (s) => ruleOutfit(data, w, s).options.map((o) => ({ title: o.title, items: o.items.sort(), tips: o.tips }));
+      return { styles: data.items.map((i) => styleOf(i)), work: plan(['上班']), hike: plan(['爬山 / 出去玩']), run: plan(['上班', '跑步']),
+               home: plan(['宅宿舍']), def: dayStyles([]) };
+    }""")
+    assert out["styles"] == ["正式", "正式", "正式", "休闲", "休闲", "休闲", "运动", "运动", "运动", "居家", "居家", "正式"], out["styles"]
+    assert out["work"][0]["items"] == ["f1", "f2", "f3"] and len(out["work"]) == 1, out["work"]
+    assert any("秋衣" in t for t in out["work"][0]["tips"]), "冷天提醒加秋衣"
+    assert out["hike"][0]["items"] == ["c1", "c2", "c3"], out["hike"]
+    assert out["run"][0]["items"] == ["f1", "f2", "f3"] and out["run"][1]["items"] == ["r1", "r2", "r3"], out["run"]
+    assert [o["items"] for o in out["home"]] == [["h1", "h2"]], out["home"]
+    assert out["def"]["main"] == ["正式"]
+
+
 def main():
     only = sys.argv[1:]
     ART.mkdir(exist_ok=True)
