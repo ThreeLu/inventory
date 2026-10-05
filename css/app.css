@@ -434,3 +434,5 @@ p.error { color: var(--danger); }
 .term-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .term-dates label { margin: 0; font-size: 14px; font-weight: 600; }
 .term-dates input { margin-top: 6px; }
+.belt-banner { text-align: left; font-size: 14px; margin: 8px 0; }
+.belt-line { margin: 0 0 8px; }

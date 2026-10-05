@@ -9,7 +9,7 @@ import {
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
-import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles } from './outfit.js';
+import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles, thickOptions, beltAdvice, isBelt, beltFatigue, BELT_TIRED } from './outfit.js';
 import { seasonPlan, storageFor, currentTerm, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
@@ -665,6 +665,7 @@ function itemView(id) {
         field('型号', item.modelNumber),
         field('序列号', item.serialNumber),
         field('购买日期', item.purchaseDate),
+        isBelt(item) ? (() => { const f = beltFatigue(item); return field('腰带疲劳', f.last ? `${f.score}/${BELT_TIRED}（系一天 +1，歇一天 −0.5，到 ${BELT_TIRED} 提醒换）` : '还没系过'); })() : null,
         (() => { const c = costPerWear(item); return c ? field('穿一次', c.wears ? `¥${c.each}（穿了 ${c.wears} 次）` : '还没记过穿它') : null; })(),
         (() => { const u = item.consumable ? usageRate(store.data, item) : null; return u ? field('多久买一次', `平均 ${u.every} 天，下次大概 ${u.next.slice(5)}`) : null; })(),
         field('价格', item.purchasePrice != null && item.purchasePrice !== '' ? `¥${item.purchasePrice}` : null),
@@ -916,6 +917,8 @@ function formView(id, q = {}) {
       },
     }, t)));
   };
+  // 厚薄的选项跟着季节变：夏季只有薄 / 厚，冬季有薄 / 适中 / 厚
+  const fieldChoices = (k) => (k === '厚薄' ? thickOptions(fieldRows.find((x) => x.k === '季节')?.v || '') : FIELD_OPTIONS[k]);
   const drawFields = () => {
     const presets = [...new Set(draft.tags.flatMap((t) => store.data.fieldPresets?.[t] || []))]
       .filter((k) => !fieldRows.some((r) => r.k === k));
@@ -923,8 +926,8 @@ function formView(id, q = {}) {
       ...fieldRows.map((r, i) => h('div', { class: 'field-row' },
         h('input', { placeholder: '名称', value: r.k, oninput: (e) => { r.k = e.target.value; } }),
         FIELD_OPTIONS[r.k]
-          ? h('select', { value: r.v, onchange: (e) => { r.v = e.target.value; } },
-            h('option', { value: '' }, '选择…'), [...new Set([...FIELD_OPTIONS[r.k], r.v].filter(Boolean))].map((o) => h('option', { value: o }, o)))
+          ? h('select', { value: r.v, 'aria-label': r.k, onchange: (e) => { r.v = e.target.value; if (r.k === '季节') drawFields(); } },
+            h('option', { value: '' }, '选择…'), [...new Set([...fieldChoices(r.k), r.v].filter(Boolean))].map((o) => h('option', { value: o }, o)))
           : h('input', { placeholder: r.k === '保质期' ? '2027-03-01' : '内容', value: r.v, oninput: (e) => { r.v = e.target.value; } }),
         h('button', { type: 'button', class: 'x-inline', onclick: () => { fieldRows.splice(i, 1); drawFields(); } }, '×'))),
       h('div', { class: 'chips' },
@@ -942,7 +945,7 @@ function formView(id, q = {}) {
     const ai = readAi();
     if (!ai.key) return toast('还没有设置 DeepSeek（设置 → AI）', 'error');
     const presets = Object.entries(store.data.fieldPresets || {}).map(([t, ks]) => `${t}：${ks.join('、')}`).join('；');
-    const options = Object.entries(FIELD_OPTIONS).map(([k, vs]) => `${k}只能是 ${vs.join('/')}`).join('；');
+    const options = `${Object.entries(FIELD_OPTIONS).map(([k, vs]) => `${k}只能是 ${vs.join('/')}`).join('；')}；厚薄跟着季节：夏季只有 薄/厚，冬季、春秋有 薄/适中/厚`;
     let out;
     try {
       out = await saving('DeepSeek 正在看这是什么……', () => askJson(ai, [
@@ -956,7 +959,8 @@ function formView(id, q = {}) {
       { maxTokens: 4000, timeout: 60000 }));
     } catch { return; }
     const cat = store.data.tags.includes(out.category) ? out.category : null;
-    const fields = Object.entries(out.fields || {}).filter(([k, v]) => k && v && (!FIELD_OPTIONS[k] || FIELD_OPTIONS[k].includes(String(v))));
+    const fields = Object.entries(out.fields || {}).filter(([k, v]) => k && v && (!FIELD_OPTIONS[k] || FIELD_OPTIONS[k].includes(String(v)))
+      && !(k === '厚薄' && !thickOptions(String(out.fields?.['季节'] || '')).includes(String(v))));
     const apply = () => {
       if (cat && draft.tags[0] !== cat) {
         draft.tags = [cat];
@@ -1552,6 +1556,9 @@ function outfitView(q = {}) {
 
   // 挑选：推荐的只打「推荐」标记，不预选；已经记录过的预选
   const recommended = new Set((o?.options || []).flatMap((opt) => opt.items));
+  // 腰带轮换：正在系的那条累了就提醒换，该换的那条标「推荐」
+  const belt = beltAdvice(store.data);
+  if (belt?.swap) recommended.add(belt.swap.b.id);
   const already = wornToday().map((i) => i.id);
   const picked = new Set(already);
   const pool = [...wearable(store.data), ...wornToday().filter((i) => !wearable(store.data).includes(i))];
@@ -1574,6 +1581,11 @@ function outfitView(q = {}) {
   const pickCard = h('div', { class: 'card', id: 'pick' },
     h('div', { class: 'eyebrow' }, already.length ? '今天穿的（可以改）' : '今天穿什么，点选'),
     h('p', { class: 'why' }, '标「推荐」的是 AI 推荐过的，穿哪件你自己点。'),
+    belt?.swap ? h('div', { class: 'banner soon belt-banner' },
+      `「${belt.current.b.name}」已经连着系了 ${belt.current.streak} 天，该歇歇了，今天换「${belt.swap.b.name}」吧`,
+      belt.swap.last ? `（它歇了 ${belt.swap.rested} 天）` : '') : null,
+    belt && belt.belts.length > 1 ? h('p', { class: 'muted small belt-line' }, '腰带：',
+      belt.belts.map((x) => `${x.b.name} 累 ${x.score}/${BELT_TIRED}`).join(' · ')) : null,
     pickBox);
   if (q.pick) setTimeout(() => pickCard.scrollIntoView({ block: 'start' }), 50);
 

@@ -1000,7 +1000,7 @@ def _(c):
     assert " · " in c.repo.commits[c.repo.head]["message"]  # 网页提交的说明带上了设备名
 
 
-@step("今天穿什么分四类：运动只在跑步、居家只在宅宿舍、休闲爬山、正式上班；DeepSeek 混进来的也去掉")
+@step("今天穿什么分五类：运动只在跑步、居家只在宅宿舍、休闲爬山、正式上班、隆重只在隆重场合；13 度以下提醒秋衣；腰带累了提醒换")
 def _(c):
     p = c.page
     c.go("#/")
@@ -1012,19 +1012,65 @@ def _(c):
         I('c1', '格子衬衫', '上衣', '休闲'), I('c2', '工装裤', '下装', '休闲'), I('c3', '登山鞋', '鞋', '休闲', '鞋'),
         I('r1', '蓝色长袖运动上衣', '上衣', '', '运动服'), I('r2', '黑色运动裤子', '下装', ''), I('r3', '白色运动鞋', '鞋', '', '鞋'),
         I('h1', '睡衣', '上衣', '休闲'), I('h2', '珊瑚绒裤', '下装', '居家'), I('l1', '秋衣', '上衣', ''),
+        I('g1', '黑色西装上衣', '上衣', ''), I('g2', '西装裤', '下装', '隆重'),
       ] };
-      const w = { min: 5, max: 15 };
+      const w = { min: 12, max: 20 };
       const plan = (s) => ruleOutfit(data, w, s).options.map((o) => ({ title: o.title, items: o.items.sort(), tips: o.tips }));
       return { styles: data.items.map((i) => styleOf(i)), work: plan(['上班']), hike: plan(['爬山 / 出去玩']), run: plan(['上班', '跑步']),
-               home: plan(['宅宿舍']), def: dayStyles([]) };
+               home: plan(['宅宿舍']), grand: plan(['隆重场合']), def: dayStyles([]) };
     }""")
-    assert out["styles"] == ["正式", "正式", "正式", "休闲", "休闲", "休闲", "运动", "运动", "运动", "居家", "居家", "正式"], out["styles"]
+    assert out["styles"] == ["正式", "正式", "正式", "休闲", "休闲", "休闲", "运动", "运动", "运动", "居家", "居家", "正式", "隆重", "隆重"], out["styles"]
+    assert out["grand"][0]["items"] == ["f3", "g1", "g2"], out["grand"]  # 西装 + 正式的皮鞋
     assert out["work"][0]["items"] == ["f1", "f2", "f3"] and len(out["work"]) == 1, out["work"]
-    assert any("秋衣" in t for t in out["work"][0]["tips"]), "冷天提醒加秋衣"
+    assert any("秋衣" in t for t in out["work"][0]["tips"]), "最低 12 度（低于 13）提醒加秋衣"
     assert out["hike"][0]["items"] == ["c1", "c2", "c3"], out["hike"]
     assert out["run"][0]["items"] == ["f1", "f2", "f3"] and out["run"][1]["items"] == ["r1", "r2", "r3"], out["run"]
     assert [o["items"] for o in out["home"]] == [["h1", "h2"]], out["home"]
     assert out["def"]["main"] == ["正式"]
+    # 腰带：系一天 +1、歇一天 −0.5；连着系满 7 天提醒换成歇着的那条
+    days = lambda a, b: [D(-n) for n in range(a, b - 1, -1)]  # noqa: E731
+    f = p.evaluate("""async (args) => {
+      const { beltFatigue, beltAdvice } = await import('./js/outfit.js');
+      const today = args.today;
+      const B = (id, name, worn) => ({ id, name, tags: ['衣服'], fields: { 部位: '配饰' }, worn });
+      const tired = B('b1', '黑色腰带', args.week), rested = B('b2', '棕色腰带', args.old);
+      const alt = B('b3', '轮着系的腰带', args.alt);
+      return { tired: beltFatigue(tired, today), alt: beltFatigue(alt, today), rested: beltFatigue(rested, today),
+               adv: beltAdvice({ items: [tired, rested] }, today) };
+    }""", {"today": D(0), "week": days(6, 0), "old": days(20, 14), "alt": [D(-n) for n in range(0, 20, 2)]})
+    assert f["tired"]["score"] == 7 and f["tired"]["streak"] == 7, f["tired"]
+    assert f["rested"]["score"] == 0.5 and f["rested"]["rested"] == 14, f["rested"]  # 系 7 天累到 7，歇 13 天剩 0.5，今天过完就回到 0
+    assert f["alt"]["score"] < 7, f["alt"]
+    assert f["adv"]["swap"]["b"]["id"] == "b2", f["adv"]
+    d = c.data()
+    belt = next(i for i in d["items"] if i["name"] == "身份证")  # 借一个物品改成两条腰带
+    d["items"] += [{**belt, "id": "ibelt1", "name": "黑色腰带", "tags": ["衣服"], "fields": {"部位": "配饰"}, "worn": days(6, 1), "label": "none"},
+                   {**belt, "id": "ibelt2", "name": "棕色腰带", "tags": ["衣服"], "fields": {"部位": "配饰"}, "worn": [D(-30)], "label": "none"}]
+    c.repo.external_write("inventory.json", json.dumps(d, ensure_ascii=False).encode())
+    # 厚薄跟着季节：夏季只有薄 / 厚；气温决定最合适的「季节·厚薄」
+    fit = p.evaluate("""async () => {
+      const { thickOptions, fitScore } = await import('./js/outfit.js');
+      const I = (season, thick) => ({ fields: { 季节: season, 厚薄: thick } });
+      return { summer: thickOptions('夏'), winter: thickOptions('冬'),
+               hot: [fitScore(I('夏', '薄'), 30), fitScore(I('夏', '厚'), 30)],
+               cold: [fitScore(I('冬', '厚'), 0), fitScore(I('冬', '适中'), 0), fitScore(I('冬', '薄'), 0), fitScore(I('夏', '薄'), 0)],
+               mild: [fitScore(I('冬', '适中'), 6), fitScore(I('冬', '厚'), 6)] };
+    }""")
+    assert fit["summer"] == ["薄", "厚"] and fit["winter"] == ["薄", "适中", "厚"], fit
+    assert fit["hot"][0] > fit["hot"][1] and fit["cold"][0] > fit["cold"][1] > fit["cold"][2] > fit["cold"][3] and fit["mild"][0] > fit["mild"][1], fit
+    # 新建衣服：没有「＋尺码」；季节选夏，厚薄只能选薄 / 厚
+    c.go("#/new")
+    p.get_by_role("button", name="衣服", exact=True).click()
+    expect(p.get_by_role("button", name="＋颜色")).to_be_visible()
+    expect(p.get_by_role("button", name="＋尺码")).to_have_count(0)
+    p.get_by_role("button", name="＋季节").click()
+    p.get_by_label("季节", exact=True).select_option("夏")
+    p.get_by_role("button", name="＋厚薄").click()
+    expect(p.get_by_label("厚薄", exact=True).locator("option")).to_have_text(["选择…", "薄", "厚"])
+    c.go("#/outfit?pick=1")
+    p.reload()
+    expect(p.locator(".belt-banner")).to_contain_text("「黑色腰带」已经连着系了 6 天")
+    expect(p.locator(".belt-line")).to_contain_text("黑色腰带 累 6/7")
 
 
 def main():

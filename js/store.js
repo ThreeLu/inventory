@@ -42,13 +42,16 @@ export function migrate(data) {
     if (it.laundry?.autoReturn && it.laundry.autoReturn <= localDay()) { delete it.laundry; it.wearsSinceWash = 0; }
   }
   // 衣服加上部位、厚薄、风格（今天穿什么靠这些搭配）
-  const want = { 衣服: ['部位', '季节', '厚薄', '风格', '颜色', '尺码'], 运动服: ['部位', '季节', '厚薄', '颜色', '尺码'], 鞋: ['季节', '风格', '颜色', '尺码'] };
+  // 尺码不用每次都推荐（用户 2026-10-05 说的）：从这几类的常用字段里拿掉一次，想记还能点「＋其他字段」手动加
+  const want = { 衣服: ['部位', '季节', '厚薄', '风格', '颜色'], 运动服: ['部位', '季节', '厚薄', '颜色'], 鞋: ['季节', '风格', '颜色'] };
   data.fieldPresets ||= {};
   for (const [tag, keys] of Object.entries(want)) {
     if (!data.tags.includes(tag)) continue;
-    const have = data.fieldPresets[tag] || [];
+    let have = data.fieldPresets[tag] || [];
+    if (!data.presetVersion) have = have.filter((k) => k !== '尺码');
     data.fieldPresets[tag] = [...have, ...keys.filter((k) => !have.includes(k))];
   }
+  data.presetVersion ||= 2;
   // 旧版用 labelPrinted 布尔值，现在是 label: 'none' | 'pending' | 'printed'；旧版编号后段 3 位，现在 4 位
   for (const x of [...data.items, ...data.locations]) {
     if (x.assetId && /^\d{3}-\d{3}$/.test(x.assetId)) x.assetId = `${x.assetId.slice(0, 4)}0${x.assetId.slice(4)}`;
