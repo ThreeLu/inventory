@@ -9,6 +9,7 @@
 
 import functools
 import json
+import re
 import os
 import struct
 import subprocess
@@ -162,7 +163,11 @@ def _(c):
     p.get_by_role("textbox", name="令牌", exact=True).fill("test-token")
     p.get_by_label("令牌到期日").fill(D(5))
     p.get_by_role("button", name="保存并连接").click()
-    expect(p.get_by_role("heading", name="今天")).to_be_visible()
+    expect(p.locator(".today-head")).to_be_visible()
+    # 和「生活」一样的外观：问候、节气小标签、角落一句话
+    expect(p.locator(".today-head .greet")).to_have_text(re.compile("好|夜深"))
+    expect(p.locator(".head-tags .tag").first).to_have_text(re.compile("时节|还有|今天"))
+    expect(p.locator(".whisper")).to_have_count(1)
     expect(p.get_by_text("GitHub 令牌还有")).to_be_visible()
     c.go("#/items")
     expect(p.get_by_text("13 件")).to_be_visible()

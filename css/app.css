@@ -437,3 +437,39 @@ p.error { color: var(--danger); }
 .belt-banner { display: flex; align-items: center; gap: 10px; text-align: left; font-size: 14px; margin: 8px 0; }
 .belt-banner button { flex: none; }
 .belt-line { margin: 0 0 8px; }
+
+/* ---------- 外观 2026-10（和「生活」网站一致）：标题宋体、首页问候、角落一句、打勾弹一下、换页淡入、底色随节气 ---------- */
+:root { --serif: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif; }
+
+/* 标题用宋体（正文还是苹方） */
+.page-head h1 { font-family: var(--serif); font-weight: 600; letter-spacing: 0.02em; }
+.card h3 { font-family: var(--serif); font-size: 15px; font-weight: 600; color: var(--text); letter-spacing: 0.03em; }
+
+/* 首页开头：日期 → 问候（宋体）→ 小标签 */
+.today-head .sub { margin: 0 0 2px; font-size: 13px; }
+.today-head .greet { font-size: 30px; }
+.head-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.head-tags .tag { font-size: 12px; padding: 3px 10px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+
+/* 角落那句话：引号小卡 */
+.whisper { margin: 28px 0 8px; position: relative; padding: 16px 16px 14px 40px; background: var(--accent-soft); border-radius: 14px; }
+.whisper::before { content: "\201C"; position: absolute; left: 12px; top: 0; font: 46px/1 Georgia, "Times New Roman", serif; color: var(--accent); }
+.whisper p { margin: 0; font-family: var(--serif); font-size: 15px; line-height: 1.7; color: var(--text); }
+.whisper small { display: block; margin-top: 4px; font-size: 11px; color: var(--muted); }
+
+/* 点选时轻轻弹一下 */
+.pop { animation: pop .45s cubic-bezier(.3, 1.6, .5, 1); }
+@keyframes pop { 0% { transform: scale(.92); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 60% { transform: scale(1.05); } 100% { transform: scale(1); box-shadow: 0 0 0 10px transparent; } }
+
+/* 换页淡入 */
+#view.enter > * { animation: enter .28s ease-out both; }
+@keyframes enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* 跟着节气，底色微微变（只在浅色） */
+@media (prefers-color-scheme: light) {
+  :root[data-season="spring"] { --bg: #f3f4ec; }
+  :root[data-season="summer"] { --bg: #f5f5ee; }
+  :root[data-season="autumn"] { --bg: #f7f2ea; }
+  :root[data-season="winter"] { --bg: #f3f3f1; }
+}
+@media (prefers-reduced-motion: reduce) { #view.enter > *, .pop { animation: none; } }

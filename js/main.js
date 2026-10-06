@@ -9,6 +9,8 @@ import {
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
+import { solarTerm, greeting, termTag } from './solar.js';
+import { wordFor } from './words.js';
 import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles, thickOptions, beltAdvice, isBelt, beltLabel, BELT_TIRED } from './outfit.js';
 import { seasonPlan, storageFor, currentTerm, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
@@ -227,7 +229,9 @@ function render() {
     else content = re.source.includes('check') ? fn(m.slice(1), q) : fn(m[1], q);
     break;
   }
-  view.replaceChildren(content || notFound('没有这个页面'));
+  view.replaceChildren(...[content || notFound('没有这个页面'), store?.data && !NO_WHISPER.test(path) ? whisper(path) : null].filter(Boolean));
+  if (path !== lastPath) { view.classList.remove('enter'); void view.offsetWidth; view.classList.add('enter'); lastPath = path; }
+  document.documentElement.dataset.season = solarTerm(todayStr()).season;
   renderedData = store?.data ? JSON.stringify(store.data) : '';
   for (const a of nav.querySelectorAll('a[href]')) {
     const target = a.getAttribute('href').slice(1);
@@ -238,6 +242,27 @@ function render() {
 }
 
 // ---------- 通用组件 ----------
+
+// 每页最下面角落的一句话（扫码、标签、编辑、设置这些专心做事的页面不放）
+const NO_WHISPER = /^\/(scan|a\/.*|new|item\/[^/]+\/(edit|label)|place\/[^/]+\/label|settings)$/;
+function whisper(path) {
+  return h('div', { class: 'whisper' }, h('p', {}, wordFor(todayStr(), path)), h('small', {}, '今天的一句'));
+}
+// 换页淡入只在真的换了页时
+let lastPath = null;
+// 点选（标签、清单的勾）时轻轻弹一下：重画以后找到同一个、已选中的那个
+document.addEventListener('click', (e) => {
+  const t = e.target.closest?.('.chip, [role="checkbox"]');
+  if (!t) return;
+  const text = t.textContent.trim();
+  const find = () => [...document.querySelectorAll('.chip.on, [role="checkbox"][aria-checked="true"]')].find((el) => el.textContent.trim() === text);
+  setTimeout(() => {
+    const el = find();
+    if (!el) return;
+    const target = el.querySelector('.shop-tick') || el;
+    target.classList.remove('pop'); void target.offsetWidth; target.classList.add('pop');
+  }, 60);
+}, true);
 
 function toast(message, kind = 'ok') {
   const el = h('div', { class: `toast ${kind}` }, message);
@@ -1408,11 +1433,15 @@ function notices() {
 
 function homeView() {
   const d = new Date();
-  const sub = h('div', { class: 'sub' }, `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAY[d.getDay()]}`);
-  getWeather().then((w) => { if (w) sub.textContent += ` · ${w.city} ${w.min}～${w.max}°C`; }).catch(() => {});
+  const wx = h('span', { class: 'tag', hidden: true });
+  getWeather().then((w) => { if (w) { wx.textContent = `${w.city} ${w.min}–${w.max}°C`; wx.hidden = false; } }).catch(() => {});
   const list = notices();
-  const head = header('今天', scanButton());
-  head.firstChild.append(sub);
+  const head = h('header', { class: 'page-head today-head' },
+    h('div', {},
+      h('div', { class: 'sub' }, `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAY[d.getDay()]}`),
+      h('h1', { class: 'greet' }, greeting(d)),
+      h('div', { class: 'head-tags' }, h('span', { class: 'tag' }, termTag(todayStr())), wx)),
+    h('div', { class: 'head-actions' }, scanButton()));
   return h('div', {},
     head,
     outfitCard(),
