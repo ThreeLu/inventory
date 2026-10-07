@@ -30,6 +30,7 @@
 - 照片文件名随机且写入后不改，网页会永久缓存；改照片要换新文件名。
 - **一件东西只有一个类别**（数据里仍是 `tags` 数组，但只放一个）。界面上分类叫「类别」，「标签」专指贴纸。
 - DeepSeek 等密钥存在数据仓库的 `config/ai.json`（所有设备共用，`Store.readConfig/saveConfig`），不放进 inventory.json。
+- 「我的故事」的简介（2026-10-06）：`js/profile.js`（物品档案、账本、生活三边同一份）读 `story-data/profile.json`（一天一次，缓存 localStorage `story-profile`，读不到就不带），`js/ai.js` 的 `askJson` 每次都把它加在 system 后面（`withProfile`）。令牌要授权 story-data。
 - 位置名称「中文 English」，柜子都在主屋；不用的东西归档并在备注写原因，不删除。
 
 ## 代码
