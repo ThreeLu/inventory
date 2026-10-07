@@ -87,6 +87,7 @@
 - 晚上问「今天穿的要洗吗」：今天穿过、没在洗衣流程里的衣服；默认勾选按穿着次数：当天最高温 < `coldBelow`(20°C) 用 `cold`（上衣 3、裤子 5、外套 12），否则 `warm`（1/3/5）。当天没记录穿什么就先问「今天穿了什么？」（可点「今天没换衣服」）。回答后写 `prefs.laundryAsked = 今天`。
 - 今天运动了吗（2026-10-07）：晚上顺序是 穿了什么 → 运动了吗 → 要洗吗（运动没答不出「要洗吗」）。运动了选种类（`SPORT_KINDS` 跑步 / 打球 / 健身 / 其他）和穿的衣服（运动类在前，其他衣服收在「其他衣服」里；今天穿过的运动衣服预选，安排里有跑步就直接展开并预选推荐的跑步那套）→ `recordExercise`：`data.exercise` 加 `{ id: 日期, date, kinds, items, sweaty? }`、记穿着、上衣进洗衣篮，裤子 / 外套 `wearsSinceWash` 到 `laundry.sport`（默认 2）或勾「出汗多」才进。没运动只写 `prefs.sportAsked`。运动穿的不再出现在「要洗吗」里。统计页「运动」、穿着记录那天写上运动。只在洗衣篮页和首页「需要注意」问（加上晚上推送）。
 - 内衣、袜子（部位）每天洗：穿过就 `washing + autoReturn 明天`，`migrate()` 到期自动清掉，不参与搭配。
+- 内裤、袜子默认洗（用户 2026-10-07 定的，必须有）：晚上「要洗吗」卡片（`.wash-card`）里总有一段「内裤、袜子 · 每天洗」，`intimatePool(false)`（不算运动的）每个部位默认勾最久没穿的那件（`intimateDefaults`，几条轮着穿）；运动卡片里同样默认勾运动内裤、运动袜子（`intimatePool(true)`，名字带「运动」或类别运动服）。勾上的 `markWorn` → 在洗、明天收回。没录的写一句「还没录…」。「今天没换衣服」只写 `prefs.sameClothes`（不再写 laundryAsked），所以内裤袜子照样问；外面衣服一件没穿也会出这张卡片。推送 `laundry_push.py` 同样规则。
 - 攒够件数或放太久、床上用品超过周期 → 首页和晚上推送提醒。分批：单独洗或送洗 / 床品 / 浅色 / 深色 / 彩色。
 - 推送：`sw.js` + `js/push.js` 订阅，订阅存数据仓库 `config/push.json`；数据仓库 `.github/workflows/laundry.yml` 每天 12:00 UTC（北京 20 点）用 secret `VAPID_PRIVATE_KEY` 发送（`laundry_push.py`，规则和网页一致）。VAPID 联系方式用网址，不用用户邮箱。
 

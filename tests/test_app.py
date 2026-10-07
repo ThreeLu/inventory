@@ -473,17 +473,19 @@ def _(c):
     expect(p.locator(".card", has_text="要洗吗")).to_have_count(0)                                 # 先问运动了没有
     p.locator(".sport-card").get_by_role("button", name="没运动").click()
     card = p.locator(".card", has_text="要洗吗")
-    expect(card).to_contain_text("今天按秋冬的次数默认勾选")                                       # 假天气最高 3°C
+    expect(card).to_contain_text("衣服按秋冬的次数默认勾选")                                       # 假天气最高 3°C
     expect(card.locator(".check-row", has_text="灰色卫衣").locator("input")).not_to_be_checked()  # 秋冬上衣 3 次才勾
     expect(card.locator(".check-row", has_text="黑色羽绒服").locator("input")).not_to_be_checked()
     expect(card.locator(".check-row", has_text="运动鞋")).to_have_count(0)                         # 鞋没穿、也不进洗衣篮
+    expect(card.locator(".check-row", has_text="黑袜子").locator("input")).to_be_checked()          # 袜子每天默认洗（昨天的已自动收回）
+    expect(card).to_contain_text("还没录内裤")
     card.locator(".check-row", has_text="灰色卫衣").locator("input").check()
-    card.get_by_role("button", name="放进洗衣篮").click()
+    card.get_by_role("button", name="去洗勾上的").click()
     expect(p.get_by_text("要洗吗")).to_have_count(0)
     d = c.data()
     assert d["prefs"]["laundryAsked"] and next(i for i in d["items"] if i["id"] == "iw3")["laundry"]["state"] == "dirty"
     sock = next(i for i in d["items"] if i["id"] == "isock")
-    assert "laundry" not in sock, f"贴身衣物没自动收回：{sock}"
+    assert sock["laundry"] == {"state": "washing", "since": D(0), "autoReturn": D(1)} and D(0) in sock["worn"], f"袜子应该今天在洗、明天收回：{sock}"
     expect(p.locator(".group-title", has_text="深色")).to_be_visible()                               # 灰色归深色一批
     expect(p.locator(".section-title", has_text="床上用品该洗了")).to_be_visible()
     c.go(f"#/item/{c.item('黑色羽绒服')['id']}")
@@ -510,7 +512,9 @@ def _(c):
             "assetId": None, "label": "none", "createdAt": "2026-10-01T00:00:00Z", "updatedAt": "2026-10-01T00:00:00Z", "worn": [], "wearsSinceWash": 0}
     d["items"] += [{**base, "id": "isp1", "name": "蓝色运动T恤", "tags": ["运动服"], "fields": {"部位": "上衣"}},
                    {**base, "id": "isp2", "name": "黑色运动裤", "tags": ["运动服"], "fields": {"部位": "下装"}},
-                   {**base, "id": "isp3", "name": "灰色短袖", "tags": ["衣服"], "fields": {"部位": "上衣"}}]
+                   {**base, "id": "isp3", "name": "灰色短袖", "tags": ["衣服"], "fields": {"部位": "上衣"}},
+                   {**base, "id": "isp4", "name": "白色内裤", "tags": ["衣服"], "fields": {"部位": "内衣"}},
+                   {**base, "id": "isp5", "name": "运动袜", "tags": ["运动服"], "fields": {"部位": "袜子"}}]
     d["prefs"].pop("sportAsked", None)
     d.pop("exercise", None)
     c.repo.external_write("inventory.json", json.dumps(d, ensure_ascii=False).encode())
@@ -523,17 +527,21 @@ def _(c):
     card.locator(".garment", has_text="黑色运动裤").click()
     card.get_by_text("其他衣服").click()                                                            # 打球穿的普通 T 恤
     card.locator(".garment", has_text="灰色短袖").click()
+    expect(card.locator(".check-row", has_text="运动袜").locator("input")).to_be_checked()          # 运动袜子默认洗
+    expect(card).to_contain_text("还没录运动内裤")
+    expect(card.locator(".check-row", has_text="白色内裤")).to_have_count(0)                       # 平时的内裤不在运动这里
     card.get_by_role("button", name="记下（3 件）").click()
     expect(p.locator(".toast", has_text="2 件放进洗衣篮")).to_be_visible()
     expect(p.locator(".sport-card")).to_have_count(0)
     d = c.data()
     by = {i["id"]: i for i in d["items"]}
-    assert d["exercise"] == [{"id": D(0), "date": D(0), "kinds": ["打球"], "items": ["isp1", "isp2", "isp3"]}], d["exercise"]
+    assert d["exercise"] == [{"id": D(0), "date": D(0), "kinds": ["打球"], "items": ["isp1", "isp2", "isp3", "isp5"]}], d["exercise"]
     assert by["isp1"]["laundry"]["state"] == "dirty" and by["isp3"]["laundry"]["state"] == "dirty"
+    assert by["isp5"]["laundry"]["autoReturn"] == D(1), by["isp5"]
     assert "laundry" not in by["isp2"] and by["isp2"]["wearsSinceWash"] == 1 and D(0) in by["isp2"]["worn"], by["isp2"]
     expect(p.get_by_text("今天打球，穿了 3 件。")).to_be_visible()
     # 出汗多：裤子第一次穿也洗
-    d["prefs"].pop("sportAsked"); d["exercise"] = []
+    d["prefs"].pop("sportAsked"); d["prefs"].pop("laundryAsked", None); d["exercise"] = []
     c.repo.external_write("inventory.json", json.dumps(d, ensure_ascii=False).encode())
     p.reload()
     card = p.locator(".sport-card")
@@ -545,6 +553,13 @@ def _(c):
     pants = c.item("黑色运动裤")
     assert pants["laundry"]["state"] == "dirty" and pants["wearsSinceWash"] == 1, pants                  # 同一天不重复算穿着
     assert c.data()["exercise"][0]["sweaty"] is True
+    wash = p.locator(".wash-card")                                                               # 运动答完再问要不要洗
+    expect(wash.locator(".check-row", has_text="白色内裤").locator("input")).to_be_checked()
+    expect(wash.locator(".check-row", has_text="运动袜")).to_have_count(0)
+    expect(wash).not_to_contain_text("还没录")
+    wash.get_by_role("button", name="去洗勾上的").click()
+    expect(p.locator(".wash-card")).to_have_count(0)
+    assert c.item("白色内裤")["laundry"]["state"] == "washing"
     c.go("#/stats")
     expect(p.locator(".card h3", has_text="运动 · 这个月 1 天")).to_be_visible()
     c.go("#/wear")
