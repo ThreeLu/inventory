@@ -256,6 +256,7 @@ nav .dot-badge { position: absolute; top: 0; right: -4px; width: 8px; height: 8p
   padding: 10px 16px; border-radius: 12px; background: var(--text); color: var(--bg); font-size: 14px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
 }
+.toast.raised { bottom: calc(144px + env(safe-area-inset-bottom)); }
 .toast.error { background: var(--danger); color: #fff; }
 .toast.undo { display: flex; align-items: center; gap: 14px; }
 .toast-undo { flex: none; min-height: 0; padding: 2px 0; border: 0; background: none; color: var(--accent-soft); font-weight: 700; font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
@@ -473,3 +474,13 @@ p.error { color: var(--danger); }
   :root[data-season="winter"] { --bg: #f3f3f1; }
 }
 @media (prefers-reduced-motion: reduce) { #view.enter > *, .pop { animation: none; } }
+
+/* 出行页底部：一个主按钮、一个次按钮，其余文字链接 */
+.trip-actions { margin: 4px 0 14px; }
+.trip-actions > .wide:first-child { margin-top: 0; }
+.link-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 14px; margin-top: 12px; }
+.link-row a { padding: 0 6px; line-height: 32px; }
+
+/* 扫序列号：横着的取景框，和 scan.js 里认的那条横带一致 */
+.scan-frame.bar { inset: 30% 10%; border-radius: 10px; }
+.sheet .scan-box { margin: 4px 0 8px; }

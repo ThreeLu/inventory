@@ -1092,6 +1092,34 @@ def _(c):
     assert c.item("腰带")["beltSwaps"][-1] == {"date": D(0), "to": 1}
 
 
+@step("序列号：扫条形码填进去（去掉 S/N 前缀），取消不改")
+def _(c):
+    p = c.page
+    c.go("#/new")
+    p.get_by_label("名称").fill("移动硬盘")
+    p.get_by_label("位置").select_option(label="　　书桌抽屉 Desk Drawer")
+    p.get_by_role("button", name="电子产品", exact=True).click()
+    p.get_by_text("品牌、购买与保修").click()
+    p.get_by_role("button", name="扫条形码").click()
+    sheet = p.locator(".sheet", has_text="扫序列号")
+    expect(sheet.locator(".scan-frame.bar")).to_be_visible()
+    p.wait_for_function("() => typeof window.__scan === 'function'")
+    p.evaluate("() => window.__scan('S/N: WX12A3456789')")
+    expect(sheet).to_have_count(0)
+    expect(p.get_by_label("序列号")).to_have_value("WX12A3456789")
+    # 再扫一次但取消：原来的不变
+    p.get_by_role("button", name="扫条形码").click()
+    sheet.get_by_role("button", name="取消").click()
+    expect(sheet).to_have_count(0)
+    assert p.evaluate("() => window.__scan === undefined")
+    expect(p.get_by_label("序列号")).to_have_value("WX12A3456789")
+    p.get_by_role("button", name="保存", exact=True).click()
+    c.wait_item("移动硬盘")
+    assert c.item("移动硬盘")["serialNumber"] == "WX12A3456789"
+    # 顺手记账的弹窗（没填价格不会问）
+    expect(p.locator(".sheet", has_text="顺手记一笔账")).to_have_count(0)
+
+
 def main():
     only = sys.argv[1:]
     ART.mkdir(exist_ok=True)

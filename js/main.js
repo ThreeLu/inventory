@@ -15,7 +15,7 @@ import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, 
 import { seasonPlan, storageFor, currentTerm, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
-import { startScanner, assetFromScan } from './scan.js';
+import { startScanner, startBarcodeScanner, serialFromScan, assetFromScan } from './scan.js';
 import { PURPOSES, geocode, weatherFor, summarizeWeather, rulePlan, aiPlan } from './trip.js';
 import { ledgerGitHub, readLedger, guessCategory, groupLines, addLedgerExpenses } from './bridge.js';
 
@@ -264,15 +264,17 @@ document.addEventListener('click', (e) => {
   }, 60);
 }, true);
 
+// 一次只出一条提示：新的换掉旧的；底部有「撤销」时放在它上面，不压住
 function toast(message, kind = 'ok') {
-  const el = h('div', { class: `toast ${kind}` }, message);
+  for (const x of document.querySelectorAll('.toast:not(.undo)')) x.remove();
+  const el = h('div', { class: `toast ${kind}${document.querySelector('.toast.undo') ? ' raised' : ''}` }, message);
   document.body.append(el);
   setTimeout(() => el.remove(), kind === 'error' ? 6000 : 2500);
 }
 
 // 常用的操作不先问「确定吗」：直接做，底部提示几秒，点「撤销」改回去
 function undoToast(text, onUndo) {
-  for (const el of document.querySelectorAll('.toast.undo')) el.remove();
+  for (const el of document.querySelectorAll('.toast')) el.remove();
   const el = h('div', { class: 'toast undo', role: 'status' }, h('span', {}, text),
     h('button', { type: 'button', class: 'toast-undo', onclick: () => { el.remove(); onUndo(); } }, '撤销'));
   document.body.append(el);
@@ -390,6 +392,34 @@ function openSheet({ title, body, confirmText = '确定', cancelText = '取消',
         cancelText ? h('button', { class: 'secondary', onclick: close }, cancelText) : null)));
   document.body.append(overlay);
   overlay.querySelector('input, textarea')?.focus();
+}
+
+// 扫条形码填序列号：扫到就填上、关掉；认错了可以再扫或者手改
+function barcodeSheet(onCode) {
+  const video = h('video', { class: 'scan-video', playsinline: true, muted: true, autoplay: true });
+  const status = h('p', { class: 'muted small center' }, '正在打开摄像头…');
+  let stop = null;
+  let closed = false;
+  const close = () => { closed = true; if (stop) stop(); delete window.__scan; overlay.remove(); };
+  const got = (text) => {
+    const v = serialFromScan(text);
+    if (!v) return;
+    close();
+    onCode(v);
+  };
+  const overlay = h('div', { class: 'sheet-overlay', onclick: (e) => { if (e.target === overlay) close(); } },
+    h('div', { class: 'sheet' },
+      h('h3', {}, '扫序列号'),
+      h('div', { class: 'scan-box short' }, video, h('div', { class: 'scan-frame bar' })),
+      status,
+      h('p', { class: 'hint' }, '对准写着 S/N 或「序列号」的那一条码，横着放进框里。一张标签上有好几条码时，让要的那条单独在框里。'),
+      h('div', { class: 'actions' }, h('button', { type: 'button', class: 'secondary', onclick: close }, '取消'))));
+  document.body.append(overlay);
+  // 自动测试没有摄像头，从这里把扫到的内容喂进来
+  if (localStorage.getItem('inventory-test-scan')) window.__scan = got;
+  startBarcodeScanner(video, got)
+    .then((s) => { if (closed) s(); else { stop = s; status.textContent = '对准条形码'; } })
+    .catch((e) => { status.textContent = e.message; status.classList.add('error'); });
 }
 
 function chipChoice(options, initial) {
@@ -1131,7 +1161,12 @@ function formView(id, q = {}) {
       h('summary', {}, '品牌、购买与保修'),
       h('label', {}, '品牌', bind('manufacturer')),
       h('label', {}, '型号', bind('modelNumber')),
-      h('label', {}, '序列号', bind('serialNumber')),
+      (() => {
+        const serial = bind('serialNumber', { 'aria-label': '序列号', autocapitalize: 'characters', autocorrect: 'off', spellcheck: 'false' });
+        const scan = () => barcodeSheet((v) => { serial.value = v; draft.serialNumber = v; toast(`扫到了：${v}`); });
+        return h('div', { class: 'label' }, '序列号', h('div', { class: 'asset-row' }, serial,
+          h('button', { type: 'button', class: 'chip add', onclick: scan }, icon('scan'), '扫条形码')));
+      })(),
       h('label', {}, '购买日期', bind('purchaseDate', { type: 'date' })),
       h('label', {}, '价格（元）', bind('purchasePrice', { type: 'number', step: '0.01', inputmode: 'decimal' })),
       h('label', {}, '购买地点', bind('purchaseFrom')),
@@ -3250,20 +3285,22 @@ function tripResult(trip, isSaved) {
         o.note ? h('span', { class: 'muted small block' }, o.note) : null))) : null,
     trip.plan.missing?.length ? h('div', { class: 'card' }, h('h3', {}, '档案里没有，建议另外准备'),
       h('ul', {}, trip.plan.missing.map((m) => h('li', {}, h('b', {}, m.name), m.reason ? `：${m.reason}` : '')))) : null,
-    h('div', { class: 'actions' },
+    // 主次分开：最该点的一个实心大按钮，其次一个浅色按钮，其余是一行文字链接
+    h('div', { class: 'trip-actions' },
       trip.status === 'planning' ? [
-        h('button', { onclick: () => persist(`准备出行：${tripTitle(trip)}`, null, `#/check/trip/${trip.id}/out`) }, '开始出发核对'),
-        h('button', { class: 'secondary', onclick: directPack }, '不核对，直接出发'),
-        h('button', { class: 'secondary', onclick: () => persist(`保存出行：${tripTitle(trip)}`) }, isSaved ? '保存勾选' : '先保存'),
-        trip.kind === '出差' || !trip.kind ? h('button', { class: 'secondary', onclick: again }, '改条件重新推荐') : null,
+        h('button', { class: 'wide', onclick: () => persist(`准备出行：${tripTitle(trip)}`, null, `#/check/trip/${trip.id}/out`) }, '开始出发核对'),
+        h('button', { class: 'secondary wide', onclick: directPack }, '不核对，直接出发'),
       ] : null,
       trip.status === 'packed' ? [
-        h('a', { class: 'button', href: `#/check/trip/${trip.id}/back` }, '开始回程核对'),
-        h('a', { class: 'button secondary', href: `#/place/${trip.boxId}` }, '看行李箱'),
-        h('button', { class: 'secondary', onclick: directUnpack }, '不核对，直接放回原处'),
+        h('a', { class: 'button wide', href: `#/check/trip/${trip.id}/back` }, '开始回程核对'),
+        h('button', { class: 'secondary wide', onclick: directUnpack }, '不核对，直接放回原处'),
       ] : null,
-      trip.status === 'done' ? h('button', { class: 'secondary', onclick: again }, '再来一次') : null,
-      h('button', { class: 'secondary', onclick: saveAsList }, '存成模板')));
+      trip.status === 'done' ? h('button', { class: 'secondary wide', onclick: again }, '再来一次') : null,
+      h('div', { class: 'link-row' },
+        trip.status === 'planning' ? h('button', { class: 'link small', onclick: () => persist(`保存出行：${tripTitle(trip)}`) }, isSaved ? '保存勾选' : '先保存') : null,
+        trip.status === 'planning' && (trip.kind === '出差' || !trip.kind) ? h('button', { class: 'link small', onclick: again }, '改条件重新推荐') : null,
+        trip.status === 'packed' ? h('a', { class: 'small', href: `#/place/${trip.boxId}` }, '看行李箱') : null,
+        h('button', { class: 'link small', onclick: saveAsList }, '存成模板'))));
 }
 
 // 出发：带走的东西装进这次出行的行李箱（位置临时变成行李箱，记住原位置）
