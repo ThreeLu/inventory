@@ -25,6 +25,20 @@ const PATHS = {
   search: '<circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/>',
   send: '<path d="M4 12 20 4l-6 16-3-7-7-1Z"/>',
   filter: '<path d="M4 6h16M7 12h10M10 18h4"/>',
+  // 物品没有照片时，格子里按类别放的小图标
+  device: '<rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/>',
+  shoe: '<path d="M3 16v-5l4-1 3 3 6 1.5c2.5.6 5 1.6 5 3.5v1H3Z"/><path d="M3 19h18"/>',
+  bag: '<path d="M5 8h14l-1 12H6L5 8Z"/><path d="M9 10V6a3 3 0 0 1 6 0v4"/>',
+  drop: '<path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z"/>',
+  bed: '<path d="M3 18V7M3 14h18v4M21 14v-2a3 3 0 0 0-3-3h-7v5"/><circle cx="7" cy="11" r="1.6"/>',
+  pen: '<path d="m15 4 5 5L9 20H4v-5L15 4Z"/><path d="m13 6 5 5"/>',
+  card: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6 16a3 3 0 0 1 6 0M15 10h3M15 13h3"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M17 6l2 2M15 8l2 2"/>',
+  cup: '<path d="M5 7h12v6a5 5 0 0 1-5 5h-2a5 5 0 0 1-5-5V7Z"/><path d="M17 9h1.5a2.5 2.5 0 0 1 0 5H17M6 21h10"/>',
+  star: '<path d="m12 4 2.4 5 5.4.6-4 3.7 1.1 5.4L12 16l-4.9 2.7 1.1-5.4-4-3.7 5.4-.6L12 4Z"/>',
+  pill: '<rect x="3.5" y="8.5" width="17" height="7" rx="3.5" transform="rotate(-45 12 12)"/><path d="m9.5 9.5 5 5"/>',
+  food: '<path d="M12 7c-1.5-2-6-2-6 3 0 5 3 10 6 9 3 1 6-4 6-9 0-5-4.5-5-6-3Z"/><path d="M12 7c0-2 1-3 3-4"/>',
+  ball: '<circle cx="12" cy="12" r="8"/><path d="M4.5 9.5c4 1 11 1 15 0M4.5 14.5c4-1 11-1 15 0M12 4v16"/>',
 };
 
 export function icon(name, cls = 'i') {

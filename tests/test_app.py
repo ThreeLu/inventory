@@ -171,6 +171,8 @@ def _(c):
     expect(p.get_by_text("GitHub 令牌还有")).to_be_visible()
     c.go("#/items")
     expect(p.get_by_text("13 件")).to_be_visible()
+    expect(p.locator(".whisper")).to_have_count(0)   # 角落那句话只在首页
+    expect(p.locator(".tile", has_text="手机充电器").locator(".tile-ph.tone-accent")).to_be_visible()   # 没照片：按类别的小图标
     expect(p.locator(".tile", has_text="布洛芬片").locator(".asset")).to_have_text("290-0001")
     p.get_by_role("button", name="列表").click()
     expect(p.locator(".row", has_text="布洛芬片")).to_be_visible()

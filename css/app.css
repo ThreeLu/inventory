@@ -145,11 +145,20 @@ select { min-width: 0; max-width: 100%; text-overflow: ellipsis; }
 .chip-scroll { display: flex; gap: 6px; overflow-x: auto; margin: 0 -16px 12px; padding: 0 16px; scrollbar-width: none; }
 .chip-scroll::-webkit-scrollbar { display: none; }
 .chip-scroll .chip { flex: none; }
-.catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px 12px; margin-bottom: 14px; }
+.catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 14px 10px; margin-bottom: 14px; }
 .tile { color: var(--text); min-width: 0; }
 .tile .ph { aspect-ratio: 1; border-radius: 14px; background: var(--card); overflow: hidden; display: grid; place-items: center; box-shadow: var(--shadow); position: relative; }
 .tile .ph img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 照片颜色各不相同：压一点点饱和度、描一圈极细的边，整页更统一 */
+.tile .ph img, .garment .ph img { filter: saturate(.9); }
+.tile .ph::after, .garment .ph::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 0.5px var(--line); pointer-events: none; }
 .tile .ph .initial { font-size: 32px; color: var(--muted); opacity: 0.6; }
+.tile-ph { --t: var(--muted); position: absolute; inset: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--t) 9%, var(--card)); color: color-mix(in srgb, var(--t) 70%, var(--card)); }
+.tile-ph svg.i { width: 30px; height: 30px; stroke-width: 1.4; }
+.tone-accent { --t: var(--accent); }
+.tone-amber { --t: var(--amber); }
+.tone-sage { --t: var(--sage); }
+.tone-slate { --t: var(--muted); }
 .tile .ph .corner { position: absolute; top: 6px; left: 6px; }
 .tile .name { font-size: 14px; font-weight: 600; margin: 7px 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile .info { font-size: 12px; color: var(--muted); margin: 1px 2px 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -283,7 +292,7 @@ nav .dot-badge { position: absolute; top: 0; right: -4px; width: 8px; height: 8p
 .outfit-card h2 { font-size: 19px; margin: 2px 0 10px; letter-spacing: -0.01em; }
 .outfit { display: grid; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 8px; }
 .garment { color: var(--text); font-size: 12px; text-align: center; min-width: 0; }
-.garment .ph { aspect-ratio: 3 / 4; border-radius: 12px; background: var(--chip); overflow: hidden; display: grid; place-items: center; }
+.garment .ph { aspect-ratio: 3 / 4; border-radius: 12px; background: var(--chip); overflow: hidden; display: grid; place-items: center; position: relative; }
 .garment .ph img { width: 100%; height: 100%; object-fit: cover; }
 .garment .ph .initial { font-size: 22px; color: var(--muted); }
 .garment span { display: block; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -353,7 +362,7 @@ p.error { color: var(--danger); }
 /* 今天穿什么：点选 */
 .garment { background: none; border: 0; padding: 0; min-height: 0; font: inherit; font-weight: 400; color: var(--text); border-radius: 12px; display: block; cursor: pointer; }
 .garment .ph { position: relative; box-shadow: inset 0 0 0 2px transparent; transition: box-shadow 0.15s; }
-.garment.selected .ph { box-shadow: inset 0 0 0 3px var(--accent); }
+.garment.selected .ph, .garment.selected .ph::after { box-shadow: inset 0 0 0 3px var(--accent); }
 .garment .rec { position: absolute; top: 4px; left: 4px; font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); line-height: 1.7; }
 .garment .tick { position: absolute; bottom: 4px; right: 4px; width: 20px; height: 20px; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-size: 12px; display: grid; place-items: center; }
 .outfit.pick { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
@@ -484,3 +493,10 @@ p.error { color: var(--danger); }
 /* 扫序列号：横着的取景框，和 scan.js 里认的那条横带一致 */
 .scan-frame.bar { inset: 30% 10%; border-radius: 10px; }
 .sheet .scan-box { margin: 4px 0 8px; }
+
+/* 按下去的手感（苹果的做法）：按钮、卡片轻轻缩一点，列表行底色深一点，底部导航变淡 */
+button, .button, .icon-btn, .chip, .tile .ph, a.card, nav#nav a { transition: transform .15s ease, opacity .15s ease, background-color .15s ease; }
+button:not(:disabled):active, .button:active, .icon-btn:active, a.chip:active, .tile:active .ph, a.card:active { transform: scale(.97); }
+a.cell:active, button.cell:not(:disabled):active, .cell.pick:not(:disabled):active, .cell.indicator:not(:disabled):active { background: var(--chip); transform: none; }
+button.link:not(:disabled):active, a.link:active, nav#nav a:active { transform: none; opacity: .55; }
+@media (prefers-reduced-motion: reduce) { button:active, .button:active, .icon-btn:active, a.chip:active, .tile:active .ph, a.card:active { transform: none !important; } }

@@ -229,7 +229,7 @@ function render() {
     else content = re.source.includes('check') ? fn(m.slice(1), q) : fn(m[1], q);
     break;
   }
-  view.replaceChildren(...[content || notFound('没有这个页面'), store?.data && !NO_WHISPER.test(path) ? whisper(path) : null].filter(Boolean));
+  view.replaceChildren(...[content || notFound('没有这个页面'), store?.data && /^\/?$/.test(path) ? whisper(path) : null].filter(Boolean));
   if (path !== lastPath) { view.classList.remove('enter'); void view.offsetWidth; view.classList.add('enter'); lastPath = path; }
   document.documentElement.dataset.season = solarTerm(todayStr()).season;
   renderedData = store?.data ? JSON.stringify(store.data) : '';
@@ -244,7 +244,7 @@ function render() {
 // ---------- 通用组件 ----------
 
 // 每页最下面角落的一句话（扫码、标签、编辑、设置这些专心做事的页面不放）
-const NO_WHISPER = /^\/(scan|a\/.*|new|item\/[^/]+\/(edit|label)|place\/[^/]+\/label|settings)$/;
+// 角落那句话只放在首页，别的页安静一点
 function whisper(path) {
   return h('div', { class: 'whisper' }, h('p', {}, wordFor(todayStr(), path)), h('small', {}, '今天的一句'));
 }
@@ -500,11 +500,24 @@ function matches(item, words) {
   return words.every((w) => text.includes(w) || (item.assetId && item.assetId.replace('-', '').includes(w.replace('-', ''))));
 }
 
+// 没照片时的格子：按类别一个小图标 + 很淡的底色（几种颜色都压得很低，不花）
+const TAG_LOOK = {
+  电子产品: ['device', 'accent'], 衣服: ['wardrobe', 'amber'], 运动服: ['wardrobe', 'amber'], 鞋: ['shoe', 'amber'], 包: ['bag', 'amber'],
+  洗漱护肤: ['drop', 'sage'], 清洁用品: ['sparkle', 'sage'], 床上用品: ['bed', 'sage'], 药品急救: ['pill', 'sage'],
+  文具: ['pen', 'slate'], 书籍资料: ['book', 'slate'], 证件文件: ['card', 'slate'], 钥匙: ['key', 'slate'],
+  水杯餐具: ['cup', 'amber'], 零食食品: ['food', 'amber'], 收藏纪念: ['star', 'accent'], 旅行用品: ['suitcase', 'accent'],
+  搬家用品: ['box', 'slate'], 收纳容器: ['box', 'slate'], 日用杂物: ['items', 'slate'], 运动器材: ['ball', 'sage'],
+};
+function tilePlaceholder(item) {
+  const [ic, tone] = TAG_LOOK[item.tags?.[0]] || ['items', 'slate'];
+  return h('span', { class: `tile-ph tone-${tone}` }, icon(ic));
+}
+
 function itemTile(item) {
   const thumb = item.photos?.[0]?.thumb;
   return h('a', { class: `tile${item.archived ? ' archived' : ''}`, href: `#/item/${item.id}` },
     h('div', { class: 'ph' },
-      thumb ? lazyPhoto(gh, thumb) : h('span', { class: 'initial' }, item.name.slice(0, 1)),
+      thumb ? lazyPhoto(gh, thumb) : tilePlaceholder(item),
       item.label === 'pending' && !item.archived ? h('span', { class: 'corner' }, labelChip(item)) : null),
     h('div', { class: 'name' }, item.name, item.quantity > 1 ? h('span', { class: 'qty' }, `×${item.quantity}`) : null),
     h('div', { class: 'info' }, assetChip(item.assetId), store.shortName(item.location),
