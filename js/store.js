@@ -102,8 +102,11 @@ export function defaultConsumable(data, tags) {
 export const INTIMATE_PARTS = ['内衣', '袜子']; // 贴身衣物：每天洗，第二天自动收回
 // 穿几次默认勾「要洗」：当天最高温低于 coldBelow 按秋冬（cold），否则按春夏（warm）
 export const LAUNDRY_DEFAULTS = {
-  warm: { 上衣: 1, 下装: 3, 外套: 5 }, cold: { 上衣: 3, 下装: 5, 外套: 12 }, coldBelow: 20, count: 8, days: 4, bedding: 14,
+  warm: { 上衣: 1, 下装: 3, 外套: 5 }, cold: { 上衣: 3, 下装: 5, 外套: 12 }, coldBelow: 20, count: 8, days: 4, bedding: 14, sport: 2,
 };
+// 运动（用户 2026-10-07 定的）：跑步、打球、健身都算。运动穿的上衣穿一次就洗；裤子、外套 sport 次洗一回，出汗多的那天都洗。
+// data.exercise = [{ id: 日期, date, kinds: [..], items: [穿的 id], sweaty? }]，没运动只记 prefs.sportAsked
+export const SPORT_KINDS = ['跑步', '打球', '健身', '其他'];
 export function laundryPrefs(data) {
   const p = data.prefs?.laundry || {};
   const D = LAUNDRY_DEFAULTS;

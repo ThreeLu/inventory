@@ -4,14 +4,14 @@ import {
   defaultLabel, setLabel, LABEL_TEXT, prefixForTags, defaultConsumable, isDepleted, ARCHIVE_REASONS,
   shoppingData, shoppingList, shopWeek, shopEstimate, usageRate, monthlyConsumables, costPerWear,
   isBox, isBag, ensureHome, parseDate, moveItem, borrowStatus,
-  RETURN_TAGS, RETURN_DAYS, INTIMATE_PARTS, laundryPrefs, laundryStatus, laundryBatches, localDay, setTodayWear, nextAssetInPrefix, nextTagCode, reminders,
+  RETURN_TAGS, RETURN_DAYS, INTIMATE_PARTS, SPORT_KINDS, laundryPrefs, laundryStatus, laundryBatches, localDay, setTodayWear, nextAssetInPrefix, nextTagCode, reminders,
 } from './store.js';
 import { h, today, compressImage, blobToBase64, lazyPhoto, photoUrl } from './util.js';
 import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
 import { solarTerm, greeting, termTag } from './solar.js';
 import { wordFor } from './words.js';
-import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles, thickOptions, beltAdvice, isBelt, beltLabel, BELT_TIRED } from './outfit.js';
+import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, styleOf, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles, thickOptions, beltAdvice, isBelt, beltLabel, BELT_TIRED } from './outfit.js';
 import { seasonPlan, storageFor, currentTerm, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
@@ -1439,9 +1439,11 @@ function notices() {
     if (left <= 14) out.push({ href: '#/settings', ic: 'gear', color: 'var(--danger)', title: left < 0 ? 'GitHub 令牌已经过期' : `GitHub 令牌还有 ${left} 天过期` });
   }
   const t = tonight();
-  if (!t.answered && new Date().getHours() >= 20) {
-    if (t.items.length) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--accent)', title: '今天穿的要洗吗？', meta: `${t.items.length} 件` });
-    else if (!wornToday().length && wearable(store.data).length) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--accent)', title: '今天穿了什么？' });
+  if (new Date().getHours() >= 20 && wearable(store.data).length + wornToday().length) {
+    // 先问穿了什么、运动了没有，都答了再问要不要洗
+    if (!t.answered && !wornToday().length) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--accent)', title: '今天穿了什么？' });
+    if (!t.sportAnswered) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--accent)', title: '今天运动了吗？', meta: '运动穿的放进洗衣篮' });
+    else if (!t.answered && t.items.length) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--accent)', title: '今天穿的要洗吗？', meta: `${t.items.length} 件` });
   }
   const ls = laundryStatus(store.data);
   if (ls.due) out.push({ href: '#/laundry', ic: 'wardrobe', color: 'var(--amber)', title: '该洗衣服了', meta: `篮子里 ${ls.dirty.length} 件` });
@@ -1721,11 +1723,99 @@ function setLaundry(ids, state, message) {
   })).then(render).catch(() => {});
 }
 
-// 今天穿过、还没处理的衣服（晚上问「要洗吗」）
+// 今天穿过、还没处理的衣服（晚上问「要洗吗」）；运动时穿的在「今天运动了吗」里处理过了，不再问
 function tonight() {
   const day = localDay();
-  const items = store.data.items.filter((i) => !i.archived && (i.worn || []).includes(day) && !i.laundry && canWash(i));
-  return { day, items, answered: store.data.prefs?.laundryAsked === day };
+  const sport = exerciseOn(day);
+  const items = store.data.items.filter((i) => !i.archived && (i.worn || []).includes(day) && !i.laundry && canWash(i) && !sport?.items.includes(i.id));
+  return { day, items, answered: store.data.prefs?.laundryAsked === day, sportAnswered: store.data.prefs?.sportAsked === day };
+}
+
+const exerciseOn = (day) => (store.data.exercise || []).find((e) => e.date === day);
+
+// 今天运动了：记下运动、穿的记一次，按运动的规则放进洗衣篮（上衣都洗；裤子、外套攒够 sport 次或出汗多才洗）。返回放进去的
+function recordExercise(data, { day, kinds, ids, sweaty }) {
+  const p = laundryPrefs(data);
+  data.exercise = [...(data.exercise || []).filter((e) => e.date !== day), { id: day, date: day, kinds, items: ids, ...(sweaty ? { sweaty } : {}) }];
+  data.prefs = { ...data.prefs, sportAsked: day };
+  const washed = [];
+  for (const it of data.items) {
+    if (!ids.includes(it.id)) continue;
+    markWorn(it, day);
+    if (!canWash(it) || it.laundry) continue;
+    if (!sweaty && ['下装', '外套'].includes(partOf(it)) && (it.wearsSinceWash || 0) < p.sport) continue;
+    it.laundry = { state: 'dirty', since: day };
+    washed.push(it);
+  }
+  return washed;
+}
+
+// 晚上问「今天运动了吗」：运动了就点运动时穿的（运动类在前，其他衣服收在下面）
+function sportCard(day) {
+  const p = laundryPrefs(store.data);
+  const o = todaysOutfit();
+  const planned = (o?.schedule || []).some((s) => s === '跑步' || s === '运动');
+  const kinds = new Set(planned ? ['跑步'] : []);
+  const wornSport = wornToday().filter((i) => styleOf(i) === '运动').map((i) => i.id);
+  const runRec = (o?.options || []).filter((x) => x.run).flatMap((x) => x.items).filter((id) => store.item(id));
+  const picked = new Set(wornSport.length ? wornSport : planned ? runRec : []);
+  const pool = [...wearable(store.data), ...wornToday().filter((i) => !wearable(store.data).includes(i))]
+    .sort((a, b) => PICK_PARTS.indexOf(partOf(a)) - PICK_PARTS.indexOf(partOf(b)));
+  const sporty = pool.filter((i) => styleOf(i) === '运动');
+  const others = pool.filter((i) => styleOf(i) !== '运动');
+  let sweaty = false;
+
+  const card = h('div', { class: 'card sport-card' });
+  const chipBox = h('div', { class: 'chips' });
+  const sportGrid = h('div', { class: 'outfit pick' });
+  const otherGrid = h('div', { class: 'outfit pick' });
+  const saveBtn = h('button', {});
+  const drawChips = () => chipBox.replaceChildren(...SPORT_KINDS.map((k) => h('button', {
+    type: 'button', class: `chip${kinds.has(k) ? ' on' : ''}`,
+    onclick: () => { if (kinds.has(k)) kinds.delete(k); else kinds.add(k); drawChips(); },
+  }, k)));
+  const drawGrids = () => {
+    for (const [box, xs] of [[sportGrid, sporty], [otherGrid, others]]) {
+      box.replaceChildren(...xs.map((i) => garmentTile(i.id, {
+        selected: picked.has(i.id), recommended: runRec.includes(i.id),
+        onclick: () => { if (picked.has(i.id)) picked.delete(i.id); else picked.add(i.id); drawGrids(); },
+      })));
+    }
+    saveBtn.textContent = picked.size ? `记下（${picked.size} 件）` : '记下';
+  };
+  const noSport = () => saveUndoable('今天没运动', (data) => { data.prefs = { ...data.prefs, sportAsked: day }; }, '记下了：今天没运动')
+    .then(render).catch(() => {});
+  saveBtn.onclick = () => {
+    const args = { day, kinds: SPORT_KINDS.filter((k) => kinds.has(k)), ids: [...picked], sweaty };
+    const n = recordExercise(structuredClone(store.data), args).length;
+    saveUndoable(`今天运动：${args.kinds.join('、') || '运动'}${picked.size ? `，穿了 ${picked.size} 件` : ''}`,
+      (data) => { recordExercise(data, args); }, n ? `记下了，${n} 件放进洗衣篮` : '记下了')
+      .then(render).catch(() => {});
+  };
+  const open = () => {
+    drawChips(); drawGrids();
+    fill(card,
+      h('div', { class: 'eyebrow' }, '今天运动了'),
+      h('h3', {}, '做了什么，穿了哪几件？'),
+      chipBox,
+      sporty.length ? sportGrid : h('p', { class: 'muted small' }, '还没有运动类的衣服（名字里带「运动」或类别是运动服），可以在下面「其他衣服」里点。'),
+      others.length ? h('details', { class: 'plain sport-others' }, h('summary', {}, `其他衣服（${others.length}）`), otherGrid) : null,
+      h('label', { class: 'check-row' },
+        h('input', { type: 'checkbox', onchange: (e) => { sweaty = e.target.checked; } }),
+        h('span', { class: 'grow' }, '出汗多，裤子也洗')),
+      h('p', { class: 'muted small' }, `上衣穿一次就洗；裤子、外套平时 ${p.sport} 次洗一回，勾了出汗多就这次一起洗。鞋只记穿了一次。`),
+      h('div', { class: 'row-btns', style: 'margin-top:12px' }, saveBtn,
+        h('button', { class: 'secondary', onclick: noSport }, '其实没运动')));
+  };
+  if (planned) open();
+  else {
+    card.append(h('div', { class: 'eyebrow' }, '今天'), h('h3', {}, '今天运动了吗？'),
+      h('p', { class: 'muted small' }, '跑步、打球、健身都算。运动穿的出了汗，直接放进洗衣篮。'),
+      h('div', { class: 'row-btns' },
+        h('button', { onclick: open }, '运动了'),
+        h('button', { class: 'secondary', onclick: noSport }, '没运动')));
+  }
+  return card;
 }
 
 function shouldWash(it) {
@@ -1754,7 +1844,8 @@ function laundryView() {
     const num = (v) => h('input', { type: 'number', min: 1, value: v, inputmode: 'numeric' });
     const rows = ['上衣', '下装', '外套'].map((k) => ({ k, warm: num(p.warm[k]), cold: num(p.cold[k]) }));
     const coldBelow = num(p.coldBelow);
-    const others = { count: [num(p.count), '洗衣篮里攒几件提醒'], days: [num(p.days), '最早一件放几天提醒'], bedding: [num(p.bedding), '床上用品几天洗一次'] };
+    const others = { count: [num(p.count), '洗衣篮里攒几件提醒'], days: [num(p.days), '最早一件放几天提醒'], bedding: [num(p.bedding), '床上用品几天洗一次'],
+      sport: [num(p.sport), '运动穿的裤子、外套几次洗一回'] };
     openSheet({
       title: '洗衣设置',
       body: h('div', { class: 'form' },
@@ -1776,19 +1867,22 @@ function laundryView() {
     });
   };
   const noRecord = !t.answered && !wornToday().length;
+  const sportDone = exerciseOn(t.day);
   const skipToday = () => saving('正在保存…', () => store.save('今天没换衣服', (data) => {
     data.prefs = { ...data.prefs, laundryAsked: t.day };
   })).then(render).catch(() => {});
 
   return h('div', {},
-    header('洗衣篮', h('button', { class: 'icon-btn', 'aria-label': '洗衣设置', onclick: editRules }, icon('gear'))),
+    header('洗衣篮', helpButton('洗衣篮怎么用', LAUNDRY_HELP), h('button', { class: 'icon-btn', 'aria-label': '洗衣设置', onclick: editRules }, icon('gear'))),
     noRecord ? h('div', { class: 'card' },
       h('div', { class: 'eyebrow' }, '今天'),
       h('h3', {}, '今天穿了什么？先记一下，再看要不要洗'),
       h('div', { class: 'row-btns' },
         h('a', { class: 'button', href: '#/outfit?pick=1' }, '去选'),
         h('button', { class: 'secondary', onclick: skipToday }, '今天没换衣服'))) : null,
-    t.items.length && !t.answered ? h('div', { class: 'card' },
+    t.sportAnswered ? null : sportCard(t.day),
+    sportDone ? h('p', { class: 'muted small' }, `今天${sportDone.kinds.join('、') || '运动了'}${sportDone.items.length ? `，穿了 ${sportDone.items.length} 件` : ''}${sportDone.sweaty ? '，出汗多' : ''}。`) : null,
+    t.items.length && !t.answered && t.sportAnswered ? h('div', { class: 'card' },
       h('div', { class: 'eyebrow' }, '今天穿的'),
       h('h3', {}, '要洗吗？勾上的放进洗衣篮'),
       h('p', { class: 'muted small' }, `今天按${isColdDay(weatherCache.w || todaysOutfit()?.weather, p.coldBelow) ? '秋冬' : '春夏'}的次数默认勾选`),
@@ -1812,6 +1906,20 @@ function laundryView() {
     h('p', { class: 'muted small' }, `内衣、袜子每天洗，第二天自动收回，不用在这里处理。床上用品每 ${p.bedding} 天提醒一次。`));
 }
 
+const LAUNDRY_HELP = [
+  ['每天晚上', [
+    '先记今天穿了什么，再答「今天运动了吗」，最后勾今天穿的要不要洗。首页「需要注意」和晚上 8 点的推送都会问。',
+    '运动了：选做了什么（跑步、打球、健身），点运动时穿的。运动类的衣服在前面，打球穿的普通 T 恤在「其他衣服」里。',
+    '运动穿的上衣直接进洗衣篮；裤子、外套默认两次洗一回，那天出汗多就勾「出汗多，裤子也洗」。点错了马上点底下的「撤销」。',
+  ]],
+  ['洗衣服', [
+    '「待洗」里勾上要洗的，点「开洗勾选的」；晾干收好了，在「在洗 / 在晾」里点「收好了」。',
+    '内衣、袜子每天洗，第二天自动收回，不用管。',
+  ]],
+  ['设置', ['右上角齿轮：穿几次默认勾「要洗」、运动穿的裤子几次洗一回、攒几件提醒。']],
+  ['记录', ['运动过的日子记在统计页的「运动」里，穿着记录里那天也会写上。']],
+];
+
 // ---------- 穿着记录 ----------
 
 function wearView() {
@@ -1826,7 +1934,8 @@ function wearView() {
   return h('div', {},
     header('穿着记录'),
     days.length ? days.map((d) => [
-      h('div', { class: 'section-title' }, `${d.slice(5).replace('-', '月')}日 ${WEEKDAY[new Date(d).getDay()]}`),
+      h('div', { class: 'section-title' }, `${d.slice(5).replace('-', '月')}日 ${WEEKDAY[new Date(d).getDay()]}`,
+        exerciseOn(d) ? ` · ${exerciseOn(d).kinds.join('、') || '运动'}` : ''),
       h('div', { class: 'outfit card' }, byDay.get(d).map((it) => garmentTile(it.id)))])
       : h('div', { class: 'card' }, h('p', {}, '还没有记录。在「今天穿什么」里点「就穿这套」就会记下来。')),
     longest.length ? [h('div', { class: 'section-title' }, '最久没穿的'),
@@ -2557,6 +2666,15 @@ function statsView() {
   const month = localDay().slice(0, 7);
   const monthSum = bought.filter((x) => x.date.startsWith(month)).reduce((a, x) => a + x.price, 0);
   const perMonth = monthlyConsumables(store.data);
+  // 运动：最近 8 周每周几天、这个月各做了几次
+  const exercise = store.data.exercise || [];
+  const exMonth = exercise.filter((e) => e.date.startsWith(month));
+  const exWeeks = weeks.map((w, n) => {
+    const end = n ? weeks[n - 1] : '9999';
+    const days = exercise.filter((e) => e.date >= w && e.date < end).length;
+    return { label: n ? `${w.slice(5)} 周` : '这周', count: days, text: `${days} 天`, href: '#/wear' };
+  });
+  const exKinds = SPORT_KINDS.map((k) => [k, exMonth.filter((e) => e.kinds.includes(k)).length]).filter(([, n]) => n);
   // 衣服穿一次多少钱：穿得多的最值，买了很少穿的「还没回本」
   const wears = items.map((i) => ({ i, c: costPerWear(i) })).filter((x) => x.c);
   const worn = wears.filter((x) => x.c.wears >= 3).sort((a, b) => a.c.each - b.c.each);
@@ -2582,6 +2700,9 @@ function statsView() {
     perMonth.length ? h('div', { class: 'card' }, h('h3', {}, `消耗品每月大约 ${money(perMonth.reduce((a, x) => a + x.perMonth, 0))}`),
       bars(perMonth.map((x) => ({ label: x.tag, count: x.perMonth, text: money(x.perMonth), href: '#/shopping' }))),
       h('p', { class: 'muted small' }, '最近 90 天买回来时记了价格的，平均到每个月')) : null,
+    exercise.length ? h('div', { class: 'card' }, h('h3', {}, `运动 · 这个月 ${exMonth.length} 天`), bars(exWeeks),
+      exKinds.length ? h('p', { class: 'small' }, exKinds.map(([k, n]) => `${k} ${n} 次`).join(' · ')) : null,
+      h('p', { class: 'muted small' }, '晚上在洗衣篮里答「今天运动了吗」记下的')) : null,
     wears.length ? h('div', { class: 'card' }, h('h3', {}, '衣服穿一次多少钱'),
       totalWears ? h('p', { class: 'small' }, `记了价格的 ${wears.length} 件一共 ${money(wears.reduce((a, x) => a + x.c.price, 0))}，穿了 ${totalWears} 次，平均每次 ${money(wears.reduce((a, x) => a + x.c.price, 0) / totalWears)}。`) : null,
       worn.length ? [h('div', { class: 'label-sm' }, '最值（穿得多）'), worn.slice(0, 5).map(wearRow)] : null,
