@@ -13,15 +13,28 @@ export const SCHEDULES = ['上班', '跑步', '爬山 / 出去玩', '隆重场�
 //   居家：风格填「居家」，或名字里有睡衣、睡裤、家居服这类——只在宿舍里穿；
 //   休闲：风格填「休闲」——爬山、出去玩；
 //   正式：风格填「正式」或没填——最常穿，上班。
+//   风格可以多选（比如「正式、休闲」），哪一类的场合都能用它。
 // 出门的搭配里绝不出现运动、居家的，隆重的只在隆重场合；秋衣秋裤是打底，最低温低于 LAYER_BELOW 时提醒加在里面。
 export const LAYER_BELOW = 13;
 const HOME = /睡衣|睡裤|睡袍|家居服|居家/;
 const GRAND = /西装|西服|礼服|燕尾服/;
+// 一件可以有几种风格（用户 2026-10-13 要的：有的衣服、鞋正式休闲都能穿），存成「正式、休闲」。
+// 自己点了两种以上就照点的来；只点了一种或没点，还按上面的规矩算出一种。
+export const STYLE_SPLIT = /[、/,，\s]+/;
+export const stylesOf = (item) => {
+  const set = String(item.fields?.['风格'] || '').split(STYLE_SPLIT).filter((x) => FIELD_OPTIONS['风格'].includes(x));
+  return set.length > 1 ? FIELD_OPTIONS['风格'].filter((x) => set.includes(x)) : [styleOf(item)];
+};
+export const hasStyle = (item, st) => stylesOf(item).includes(st);
+// 只有一种风格时的那一种（多选的取第一种，给旧代码和显示用）
 export function styleOf(item) {
-  if (/运动/.test(item.name) || item.tags[0] === '运动服' || item.fields?.['风格'] === '运动') return '运动';
-  if (item.fields?.['风格'] === '居家' || HOME.test(item.name)) return '居家';
-  if (item.fields?.['风格'] === '隆重' || GRAND.test(item.name)) return '隆重';
-  return item.fields?.['风格'] === '休闲' ? '休闲' : '正式';
+  const own = String(item.fields?.['风格'] || '').split(STYLE_SPLIT).filter(Boolean);
+  if (own.length > 1 && own.every((x) => FIELD_OPTIONS['风格'].includes(x))) return own[0];
+  const st = own[0] || '';
+  if (/运动/.test(item.name) || item.tags[0] === '运动服' || st === '运动') return '运动';
+  if (st === '居家' || HOME.test(item.name)) return '居家';
+  if (st === '隆重' || GRAND.test(item.name)) return '隆重';
+  return st === '休闲' ? '休闲' : '正式';
 }
 const LAYER = /秋衣|秋裤|打底|保暖内衣|保暖裤/;
 export const isLayer = (i) => LAYER.test(i.name);
@@ -154,7 +167,7 @@ export function ruleOutfit(data, w, schedule = []) {
   };
   // 先按今天要的类别挑（排前面的优先）；日常那套缺哪个部位，用别的日常衣服补，但绝不用运动的
   const pick = (styles, part, strict) => {
-    const of = (st) => all.filter((i) => partOf(i) === part && st.includes(styleOf(i))).sort((a, b) => score(b) - score(a))[0];
+    const of = (st) => all.filter((i) => partOf(i) === part && stylesOf(i).some((x) => st.includes(x))).sort((a, b) => score(b) - score(a))[0];
     // 缺的部位用平时出门的补（隆重的缺鞋就用正式的皮鞋）；绝不用运动、居家的
     return styles.map((st) => of([st])).find(Boolean) || (strict ? null : of(styles.includes('隆重') ? ['正式'] : ['正式', '休闲']));
   };
@@ -259,12 +272,12 @@ export async function aiOutfits(ai, data, w, schedule, note) {
   const { main, run, home } = dayStyles(schedule);
   const lines = pool.map((i) => {
     const f = Object.entries(i.fields || {}).filter(([k]) => k !== '风格').map(([k, v]) => `${k}=${v}`).join(' ');
-    return `${i.id} | ${i.name} | ${partOf(i)} | 类别=${styleOf(i)} | ${f || '-'} | 最近穿：${(i.worn || []).slice(-3).join(',') || '没记录'}`;
+    return `${i.id} | ${i.name} | ${partOf(i)} | 类别=${stylesOf(i).join('、')} | ${f || '-'} | 最近穿：${(i.worn || []).slice(-3).join(',') || '没记录'}`;
   });
   const layers = wearable(data).filter(isLayer).map((i) => i.name);
   const system = [
     `你是帮${data.prefs?.gender === '男' ? '男' : ''}大学生搭配日常穿着的助手。只能从给出的衣服里挑，用它们的 id。`,
-    '他的衣服分五类（看每行的「类别」）：运动 = 只在跑步时穿；居家 = 只在宿舍里穿（睡衣这类）；休闲 = 爬山、出去玩；正式 = 他最常穿的，上班穿；隆重 = 西装这类，只在特别隆重的场合穿。',
+    '他的衣服分五类（看每行的「类别」，一件可能有几类，用、隔开，属于其中哪类就能在哪类场合穿）：运动 = 只在跑步时穿；居家 = 只在宿舍里穿（睡衣这类）；休闲 = 爬山、出去玩；正式 = 他最常穿的，上班穿；隆重 = 西装这类，只在特别隆重的场合穿。',
     `铁规矩：出门的搭配里绝不能出现「运动」「居家」类的衣服和鞋；「隆重」类只在今天安排了隆重场合时用（缺鞋可以配正式的）${main.includes('隆重') ? '' : '，今天没有，不要用'}；一套里的衣服和鞋尽量同一类。`,
     main.length ? `今天出门穿：${main.join('、')}（按顺序优先）。给 2～3 套这一类的不同方案，每套是一整身：上衣+下装+鞋，冷的时候加外套。` : '今天不出门。',
     run ? '今天还要跑步：另外再给一套跑步穿的，只用「运动」类，title 写「跑步穿」。' : '今天不跑步，不要给运动的方案。',
@@ -288,10 +301,11 @@ export async function aiOutfits(ai, data, w, schedule, note) {
   // 否则是出门那套（运动、居家的全去掉）；今天没安排的方案不要
   const options = (out.options || []).map((o) => {
     const ids = [...new Set((o.items || []).filter((id) => byId.has(id)))];
-    const of = (st) => ids.filter((id) => styleOf(byId.get(id)) === st);
-    const kind = of('运动').length > ids.length / 2 ? 'run' : of('居家').length > ids.length / 2 ? 'home' : 'out';
+    const of = (st) => ids.filter((id) => hasStyle(byId.get(id), st));
+    const only = (st) => ids.filter((id) => stylesOf(byId.get(id)).join() === st).length; // 正式休闲都行的不算进哪一种
+    const kind = only('运动') > ids.length / 2 ? 'run' : only('居家') > ids.length / 2 ? 'home' : 'out';
     const banned = ['运动', '居家', ...(main.includes('隆重') ? [] : ['隆重'])];
-    const items = kind === 'run' ? of('运动') : kind === 'home' ? of('居家') : ids.filter((id) => !banned.includes(styleOf(byId.get(id))));
+    const items = kind === 'run' ? of('运动') : kind === 'home' ? of('居家') : ids.filter((id) => stylesOf(byId.get(id)).some((x) => !banned.includes(x)));
     return {
       title: String(o.title || '').slice(0, 20), items,
       why: String(o.why || '').slice(0, 200),

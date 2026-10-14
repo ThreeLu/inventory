@@ -211,6 +211,7 @@ details.plain { box-shadow: none; padding: 0; background: none; margin: 0; }
 details.plain summary { min-height: 36px; font-weight: 500; color: var(--accent); font-size: 14px; }
 .field-row { display: flex; gap: 8px; margin: 6px 0; }
 .field-row input:first-child { flex: 0 0 34%; }
+.field-row .style-chips { flex: 1; margin: 2px 0; gap: 6px; }
 .x-inline { background: var(--chip); color: var(--muted); padding: 0 12px; }
 .asset-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
 .asset-row input { margin-top: 0 !important; flex: 1; }
@@ -280,6 +281,9 @@ nav .dot-badge { position: absolute; top: 0; right: -4px; width: 8px; height: 8p
 .sheet { width: 100%; max-width: 720px; background: var(--bg); border-radius: 18px 18px 0 0; padding: 10px 16px calc(18px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
 .sheet::before { content: ""; display: block; width: 36px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto 12px; }
 .sheet h3 { color: var(--text); font-size: 17px; letter-spacing: 0; }
+.sheet-head { position: sticky; top: -10px; z-index: 1; display: flex; align-items: center; gap: 12px; margin: 0 -16px; padding: 0 16px 2px; background: var(--bg); }
+.sheet-head h3 { flex: 1; margin: 8px 0; }
+.sheet-close { flex: none; min-height: 36px; padding: 0 2px 0 10px; background: none; box-shadow: none; color: var(--accent); font-size: 15px; font-weight: 500; }
 .sheet input:not([type=checkbox]) { margin: 8px 0; }
 .sheet .actions { margin-top: 14px; }
 .sheet .actions button { flex: 1; }

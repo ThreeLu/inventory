@@ -11,7 +11,7 @@ import { makeXlsx } from './xlsx.js';
 import { icon } from './icons.js';
 import { solarTerm, greeting, termTag } from './solar.js';
 import { wordFor } from './words.js';
-import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, styleOf, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles, thickOptions, beltAdvice, isBelt, beltLabel, BELT_TIRED } from './outfit.js';
+import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, stylesOf, hasStyle, STYLE_SPLIT, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles, thickOptions, beltAdvice, isBelt, beltLabel, BELT_TIRED } from './outfit.js';
 import { seasonPlan, storageFor, currentTerm, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
@@ -381,17 +381,29 @@ function fill(el, ...children) {
 }
 
 // 底部弹出的小表单。onConfirm 返回 false 表示不关闭（比如校验没过）
+// 右上角总有「关闭」（长的表单要往下滑才看到底下的取消，用户说过点进去不知道怎么退出），按 Esc、换页也会关
 function openSheet({ title, body, confirmText = '确定', cancelText = '取消', onConfirm }) {
-  const close = () => overlay.remove();
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+    window.removeEventListener('hashchange', close);
+  };
   const overlay = h('div', { class: 'sheet-overlay', onclick: (e) => { if (e.target === overlay) close(); } },
-    h('div', { class: 'sheet' },
-      h('h3', {}, title),
+    h('div', { class: 'sheet', role: 'dialog', 'aria-label': title },
+      h('div', { class: 'sheet-head' },
+        h('h3', {}, title),
+        h('button', { type: 'button', class: 'sheet-close', onclick: close }, '关闭')),
       body,
       h('div', { class: 'actions' },
         h('button', { onclick: async () => { if ((await onConfirm()) !== false) close(); } }, confirmText),
         cancelText ? h('button', { class: 'secondary', onclick: close }, cancelText) : null)));
   document.body.append(overlay);
-  overlay.querySelector('input, textarea')?.focus();
+  document.addEventListener('keydown', onKey);
+  window.addEventListener('hashchange', close);
+  // 一打开就弹数字键盘会把整个表单盖住（洗衣设置），数字框不自动聚焦
+  const first = overlay.querySelector('input, textarea');
+  if (first && first.type !== 'number') first.focus();
 }
 
 // 扫条形码填序列号：扫到就填上、关掉；认错了可以再扫或者手改
@@ -770,7 +782,8 @@ function itemView(id) {
       ] : null,
       !item.archived && canWash(item) ? (
         !item.laundry ? h('button', { class: 'secondary', onclick: () => setLaundry([id], 'dirty', `放进洗衣篮：${item.name}`) }, '放进洗衣篮')
-          : item.laundry.state === 'dirty' ? h('button', { class: 'secondary', onclick: () => setLaundry([id], 'washing', `开洗：${item.name}`) }, '开洗')
+          : item.laundry.state === 'dirty' ? [h('button', { class: 'secondary', onclick: () => setLaundry([id], 'washing', `开洗：${item.name}`) }, '开洗'),
+            h('button', { class: 'secondary', onclick: () => takeBack([id], `从洗衣篮拿回去：${item.name}`) }, '拿回去不洗')]
             : h('button', { class: 'secondary', onclick: () => setLaundry([id], null, `收好了：${item.name}`) }, '收好了')) : null,
       h('button', { class: 'secondary', onclick: copy }, '复制'),
       item.archived
@@ -990,13 +1003,31 @@ function formView(id, q = {}) {
   };
   // 厚薄的选项跟着季节变：夏季只有薄 / 厚，冬季有薄 / 适中 / 厚
   const fieldChoices = (k) => (k === '厚薄' ? thickOptions(fieldRows.find((x) => x.k === '季节')?.v || '') : FIELD_OPTIONS[k]);
+  // 风格可以多选：点一下选上、再点一下取消，存成「正式、休闲」
+  const styleChips = (r) => {
+    const box = h('div', { class: 'chips style-chips', role: 'group', 'aria-label': '风格（可多选）' });
+    const draw = () => {
+      const on = String(r.v || '').split(STYLE_SPLIT).filter(Boolean);
+      box.replaceChildren(...FIELD_OPTIONS['风格'].map((o) => h('button', {
+        type: 'button', class: `chip${on.includes(o) ? ' on' : ''}`, 'aria-pressed': String(on.includes(o)),
+        onclick: () => {
+          const next = on.includes(o) ? on.filter((x) => x !== o) : [...on, o];
+          r.v = FIELD_OPTIONS['风格'].filter((x) => next.includes(x)).join('、');
+          draw();
+        },
+      }, o)));
+    };
+    draw();
+    return box;
+  };
   const drawFields = () => {
     const presets = [...new Set(draft.tags.flatMap((t) => store.data.fieldPresets?.[t] || []))]
       .filter((k) => !fieldRows.some((r) => r.k === k));
     fieldBox.replaceChildren(
       ...fieldRows.map((r, i) => h('div', { class: 'field-row' },
         h('input', { placeholder: '名称', value: r.k, oninput: (e) => { r.k = e.target.value; } }),
-        FIELD_OPTIONS[r.k]
+        r.k === '风格' ? styleChips(r)
+        : FIELD_OPTIONS[r.k]
           ? h('select', { value: r.v, 'aria-label': r.k, onchange: (e) => { r.v = e.target.value; if (r.k === '季节') drawFields(); } },
             h('option', { value: '' }, '选择…'), [...new Set([...fieldChoices(r.k), r.v].filter(Boolean))].map((o) => h('option', { value: o }, o)))
           : h('input', { placeholder: r.k === '保质期' ? '2027-03-01' : '内容', value: r.v, oninput: (e) => { r.v = e.target.value; } }),
@@ -1016,7 +1047,7 @@ function formView(id, q = {}) {
     const ai = readAi();
     if (!ai.key) return toast('还没有设置 DeepSeek（设置 → AI）', 'error');
     const presets = Object.entries(store.data.fieldPresets || {}).map(([t, ks]) => `${t}：${ks.join('、')}`).join('；');
-    const options = `${Object.entries(FIELD_OPTIONS).map(([k, vs]) => `${k}只能是 ${vs.join('/')}`).join('；')}；厚薄跟着季节：夏季只有 薄/厚，冬季、春秋有 薄/适中/厚`;
+    const options = `${Object.entries(FIELD_OPTIONS).map(([k, vs]) => `${k}只能是 ${vs.join('/')}`).join('；')}；风格可以多选，用、隔开（比如 正式、休闲）；厚薄跟着季节：夏季只有 薄/厚，冬季、春秋有 薄/适中/厚`;
     let out;
     try {
       out = await saving('DeepSeek 正在看这是什么……', () => askJson(ai, [
@@ -1030,7 +1061,7 @@ function formView(id, q = {}) {
       { maxTokens: 4000, timeout: 60000 }));
     } catch { return; }
     const cat = store.data.tags.includes(out.category) ? out.category : null;
-    const fields = Object.entries(out.fields || {}).filter(([k, v]) => k && v && (!FIELD_OPTIONS[k] || FIELD_OPTIONS[k].includes(String(v)))
+    const fields = Object.entries(out.fields || {}).filter(([k, v]) => k && v && (!FIELD_OPTIONS[k] || (k === '风格' ? String(v).split(STYLE_SPLIT) : [String(v)]).every((x) => FIELD_OPTIONS[k].includes(x)))
       && !(k === '厚薄' && !thickOptions(String(out.fields?.['季节'] || '')).includes(String(v))));
     const apply = () => {
       if (cat && draft.tags[0] !== cat) {
@@ -1723,6 +1754,15 @@ function setLaundry(ids, state, message) {
   })).then(render).catch(() => {});
 }
 
+// 从洗衣篮拿回去（今天突然不想洗了）：只是不在篮子里了，没洗过，所以洗后穿的次数不清零。可以撤销
+function takeBack(ids, message) {
+  if (!ids.length) return toast('先勾上要拿回去的', 'error');
+  const n = ids.length;
+  return saveUndoable(message, (data) => {
+    for (const it of data.items) if (ids.includes(it.id) && it.laundry?.state === 'dirty') delete it.laundry;
+  }, n > 1 ? `${n} 件拿回去了` : '拿回去了').then(render).catch(() => {});
+}
+
 // 今天穿过、还没处理的衣服（晚上问「要洗吗」）；运动时穿的在「今天运动了吗」里处理过了，不再问
 function tonight() {
   const day = localDay();
@@ -1736,9 +1776,11 @@ function tonight() {
 // 放进去就是「在洗」，第二天自动收回
 const isIntimate = (i) => INTIMATE_PARTS.includes(i.fields?.['部位']);
 const INTIMATE_NAME = { 内衣: '内裤', 袜子: '袜子' };
+// 运动那段要带「运动」风格的；平时那段要有运动以外的风格（两种都点了的两边都算）
+const fitsSport = (i, sport) => (sport ? hasStyle(i, '运动') : stylesOf(i).some((x) => x !== '运动'));
 function intimatePool(sport) {
   return store.data.items.filter((i) => !i.archived && isClothes(i) && isIntimate(i) && !i.laundry && !i.borrow
-    && !isBox(store.data, i.location) && (styleOf(i) === '运动') === sport);
+    && !isBox(store.data, i.location) && fitsSport(i, sport));
 }
 // 每个部位默认勾一件：最久没穿的那件（几条轮着穿）
 function intimateDefaults(pool) {
@@ -1748,7 +1790,7 @@ function intimateDefaults(pool) {
 }
 // 内裤、袜子那一段：列出来、默认勾好；没录的说一声
 function intimateRows(pool, set, sport) {
-  const all = store.data.items.filter((i) => !i.archived && isClothes(i) && isIntimate(i) && (styleOf(i) === '运动') === sport);
+  const all = store.data.items.filter((i) => !i.archived && isClothes(i) && isIntimate(i) && fitsSport(i, sport));
   const missing = INTIMATE_PARTS.filter((part) => !all.some((i) => i.fields['部位'] === part)).map((part) => `${sport ? '运动' : ''}${INTIMATE_NAME[part]}`);
   return [h('div', { class: 'group-title' }, sport ? '运动内裤、运动袜子' : '内裤、袜子 · 每天洗'),
     pool.map((it) => laundryCheckRow(it, set, `${INTIMATE_NAME[it.fields['部位']]} · ${set.has(it.id) ? '默认洗' : '上次穿 ' + ((it.worn || []).slice(-1)[0]?.slice(5) || '没记录')}`)),
@@ -1783,13 +1825,13 @@ function sportCard(day) {
   const o = todaysOutfit();
   const planned = (o?.schedule || []).some((s) => s === '跑步' || s === '运动');
   const kinds = new Set(planned ? ['跑步'] : []);
-  const wornSport = wornToday().filter((i) => styleOf(i) === '运动').map((i) => i.id);
+  const wornSport = wornToday().filter((i) => hasStyle(i, '运动')).map((i) => i.id);
   const runRec = (o?.options || []).filter((x) => x.run).flatMap((x) => x.items).filter((id) => store.item(id));
   const picked = new Set(wornSport.length ? wornSport : planned ? runRec : []);
   const pool = [...wearable(store.data), ...wornToday().filter((i) => !wearable(store.data).includes(i))]
     .sort((a, b) => PICK_PARTS.indexOf(partOf(a)) - PICK_PARTS.indexOf(partOf(b)));
-  const sporty = pool.filter((i) => styleOf(i) === '运动');
-  const others = pool.filter((i) => styleOf(i) !== '运动');
+  const sporty = pool.filter((i) => hasStyle(i, '运动'));
+  const others = pool.filter((i) => !hasStyle(i, '运动'));
   const under = intimatePool(true);
   const underPicked = new Set(intimateDefaults(under));
   let sweaty = false;
@@ -1935,7 +1977,8 @@ function laundryView() {
       laundryBatches(st.dirty).map(([name, xs]) => [h('div', { class: 'group-title' }, name),
         xs.map((it) => checkRow(it, selDirty, `放进来 ${Math.max(0, Math.floor((new Date(localDay()) - new Date(it.laundry.since)) / 86400000))} 天`))]),
       h('div', { class: 'actions', style: 'margin-top:12px' },
-        h('button', { onclick: () => setLaundry([...selDirty], 'washing', `开洗：${selDirty.size} 件`) }, '开洗勾选的'))) : h('p', { class: 'muted small' }, '洗衣篮是空的。'),
+        h('button', { onclick: () => setLaundry([...selDirty], 'washing', `开洗：${selDirty.size} 件`) }, '开洗勾选的'),
+        h('button', { class: 'secondary', onclick: () => takeBack([...selDirty], `从洗衣篮拿回去：${selDirty.size} 件`) }, '拿回去不洗'))) : h('p', { class: 'muted small' }, '洗衣篮是空的。'),
     st.washing.length ? [h('div', { class: 'section-title' }, `在洗 / 在晾（${st.washing.length}）`),
       h('div', { class: 'card' }, st.washing.map((it) => checkRow(it, selWash, `${it.laundry.since.slice(5)} 开洗 · 收好后回到${store.shortName(it.location)}`)),
         h('div', { class: 'actions', style: 'margin-top:12px' },
@@ -1953,9 +1996,10 @@ const LAUNDRY_HELP = [
   ]],
   ['洗衣服', [
     '「待洗」里勾上要洗的，点「开洗勾选的」；晾干收好了，在「在洗 / 在晾」里点「收好了」。',
+    '今天突然不想洗了：在「待洗」里只勾上要拿出来的，点「拿回去不洗」，衣服回到原来的地方，穿过几次照样记着。点错了马上点底下的「撤销」。在物品页也能点「拿回去不洗」。',
     '内裤、袜子每天晚上默认勾上（几条轮着，勾最久没穿的那条），不对就点一下换；运动了，运动内裤、运动袜子也默认勾上。它们直接算在洗，第二天自动收回。',
   ]],
-  ['设置', ['右上角齿轮：穿几次默认勾「要洗」、运动穿的裤子几次洗一回、攒几件提醒。']],
+  ['设置', ['右上角齿轮：穿几次默认勾「要洗」、运动穿的裤子几次洗一回、攒几件提醒。改完点「保存」；不想改了点右上角「关闭」，或点上面灰色的地方。']],
   ['记录', ['运动过的日子记在统计页的「运动」里，穿着记录里那天也会写上。']],
 ];
 

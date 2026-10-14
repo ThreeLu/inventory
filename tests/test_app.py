@@ -1160,6 +1160,81 @@ def _(c):
     assert c.item("腰带")["beltSwaps"][-1] == {"date": D(0), "to": 1}
 
 
+@step("风格多选：正式休闲都能穿的两种场合都推荐；洗衣篮拿回去不洗；洗衣设置能关掉")
+def _(c):
+    p = c.page
+    c.go("#/")
+    out = p.evaluate("""async () => {
+      const { ruleOutfit, stylesOf } = await import('./js/outfit.js');
+      const I = (id, name, part, style, tag = '衣服') => ({ id, name, tags: [tag], fields: { 部位: part, 季节: '春秋', ...(style ? { 风格: style } : {}) } });
+      const data = { locations: [], items: [
+        I('f1', '黑色衬衫', '上衣', '正式'), I('f2', '西裤', '下装', '正式'),
+        I('c1', '格子衬衫', '上衣', '休闲'), I('c2', '工装裤', '下装', '休闲'),
+        I('b1', '黑色板鞋', '鞋', '正式、休闲', '鞋'), I('r1', '白色运动鞋', '鞋', '运动、休闲', '鞋'),
+      ] };
+      const w = { min: 18, max: 24 };
+      const plan = (s) => ruleOutfit(data, w, s).options.map((o) => o.items.sort());
+      return { styles: data.items.map((i) => stylesOf(i)), work: plan(['上班']), hike: plan(['爬山 / 出去玩']) };
+    }""")
+    assert out["styles"][4] == ["正式", "休闲"] and out["styles"][5] == ["休闲", "运动"], out["styles"]
+    assert out["work"][0] == ["b1", "f1", "f2"], out["work"]   # 上班：正式休闲都行的板鞋
+    assert "b1" in out["hike"][0] or "r1" in out["hike"][0], out["hike"]
+    # 新建衣服：风格点两个，存成「正式、休闲」
+    c.go("#/new")
+    p.get_by_label("名称").fill("藏青色夹克")
+    p.get_by_label("位置").select_option(label="　当季衣柜 Current Season Wardrobe")
+    p.get_by_role("button", name="衣服", exact=True).click()
+    p.get_by_role("button", name="＋风格").click()
+    group = p.get_by_role("group", name="风格（可多选）")
+    group.get_by_role("button", name="正式").click()
+    group.get_by_role("button", name="休闲").click()
+    group.get_by_role("button", name="隆重").click()
+    group.get_by_role("button", name="隆重").click()            # 再点一下取消
+    expect(group.get_by_role("button", name="休闲")).to_have_attribute("aria-pressed", "true")
+    p.get_by_role("button", name="保存", exact=True).click()
+    c.wait_item("藏青色夹克")
+    assert c.item("藏青色夹克")["fields"]["风格"] == "正式、休闲"
+    # 洗衣篮：放进去，再拿回去（穿过的次数不清零），可以撤销
+    item = c.item("藏青色夹克")
+    d = c.data()
+    for i in d["items"]:
+        if i["id"] == item["id"]:
+            i["wearsSinceWash"] = 2
+    c.repo.external_write("inventory.json", json.dumps(d, ensure_ascii=False).encode())
+    c.go(f"#/item/{item['id']}")
+    p.reload()
+    p.get_by_role("button", name="放进洗衣篮").click()
+    expect(p.get_by_text("在洗衣篮里")).to_be_visible()
+    c.go("#/laundry")
+    row = p.locator(".check-row", has_text="藏青色夹克")
+    expect(row).to_be_visible()
+    for r in p.locator(".check-row").all():   # 只留藏青色夹克勾着
+        box = r.locator("input")
+        if "藏青色夹克" not in r.inner_text() and box.is_checked():
+            box.uncheck()
+    p.get_by_role("button", name="拿回去不洗").click()
+    expect(p.locator(".check-row", has_text="藏青色夹克")).to_have_count(0)
+    t = c.item("藏青色夹克")
+    assert "laundry" not in t and t["wearsSinceWash"] == 2, t
+    p.get_by_role("button", name="撤销").click()
+    expect(p.locator(".check-row", has_text="藏青色夹克")).to_be_visible()
+    c.go(f"#/item/{item['id']}")
+    p.get_by_role("button", name="拿回去不洗").click()
+    expect(p.get_by_role("button", name="放进洗衣篮")).to_be_visible()
+    # 洗衣设置：右上角「关闭」、点外面、Esc 都能退出，不保存
+    c.go("#/laundry")
+    p.get_by_role("button", name="洗衣设置").click()
+    sheet = p.get_by_role("dialog", name="洗衣设置")
+    expect(sheet).to_be_visible()
+    sheet.locator("input").first.fill("9")
+    sheet.get_by_role("button", name="关闭").click()
+    expect(sheet).to_have_count(0)
+    p.get_by_role("button", name="洗衣设置").click()
+    p.keyboard.press("Escape")
+    expect(sheet).to_have_count(0)
+    assert (c.data().get("prefs", {}).get("laundry") or {}).get("warm", {}).get("上衣") != 9
+
+
 @step("序列号：扫条形码填进去（去掉 S/N 前缀），取消不改")
 def _(c):
     p = c.page
