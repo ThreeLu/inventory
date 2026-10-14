@@ -12,7 +12,6 @@ import { icon } from './icons.js';
 import { solarTerm, greeting, termTag } from './solar.js';
 import { wordFor } from './words.js';
 import { SCHEDULES, FIELD_OPTIONS, todayWeather, weatherLine, wearable, partOf, stylesOf, hasStyle, STYLE_SPLIT, ruleOutfit, aiOutfits, todayStr, isColdDay, dayStyles, thickOptions, beltAdvice, isBelt, beltLabel, BELT_TIRED } from './outfit.js';
-import { seasonPlan, storageFor, currentTerm, nextTerm as nextSeasonTerm } from './season.js';
 import { askJson, itemLine } from './ai.js';
 import { pushSupport, subscribe, currentSubscription, deviceName, PUSH_FILE } from './push.js';
 import { startScanner, startBarcodeScanner, serialFromScan, assetFromScan } from './scan.js';
@@ -168,7 +167,6 @@ const routes = [
   [/^\/outfit$/, (_, q) => outfitView(q)],
   [/^\/wear$/, () => wearView()],
   [/^\/laundry$/, () => laundryView()],
-  [/^\/season$/, () => seasonView()],
   [/^\/ask$/, () => chatView()],
   [/^\/lists$/, () => listsView()],
   [/^\/list\/([^/]+)$/, (id) => listView(id)],
@@ -186,7 +184,7 @@ const routes = [
 const NAV_GROUPS = {
   '/': [/^\/?$/, /^\/ask/],
   '/items': [/^\/items/, /^\/find/, /^\/places?/, /^\/item\//, /^\/new/, /^\/a\//, /^\/scan/],
-  '/wardrobe': [/^\/wardrobe/, /^\/outfit/, /^\/wear/, /^\/laundry/, /^\/trips?/, /^\/season/, /^\/lists?/, /^\/check/],
+  '/wardrobe': [/^\/wardrobe/, /^\/outfit/, /^\/wear/, /^\/laundry/, /^\/trips?/, /^\/lists?/, /^\/check/],
   '/me': [/^\/me/, /^\/lost/, /^\/siri/, /^\/term/, /^\/more/, /^\/labels/, /^\/restock/, /^\/shopping/, /^\/reminders/, /^\/stats/, /^\/manage/, /^\/settings/, /^\/boxes/, /^\/borrow/, /^\/loans/],
 };
 
@@ -266,6 +264,8 @@ document.addEventListener('click', (e) => {
 
 // 一次只出一条提示：新的换掉旧的；底部有「撤销」时放在它上面，不压住
 function toast(message, kind = 'ok') {
+  // 底部已经有「…  撤销」时，普通的「已保存」就不再叠一条了，只出错误
+  if (kind !== 'error' && document.querySelector('.toast.undo')) return;
   for (const x of document.querySelectorAll('.toast:not(.undo)')) x.remove();
   const el = h('div', { class: `toast ${kind}${document.querySelector('.toast.undo') ? ' raised' : ''}` }, message);
   document.body.append(el);
@@ -2025,40 +2025,6 @@ function wearView() {
       h('div', { class: 'list' }, longest.map((it) => itemRow(it, h('span', {}, (it.worn || []).length ? `上次 ${(it.worn || []).slice(-1)[0]}` : '没穿过记录'))))] : null);
 }
 
-// ---------- 换季整理 ----------
-
-function seasonView() {
-  const plan = seasonPlan(store.data);
-  const next = nextSeasonTerm();
-  const chosen = new Set([...plan.bring, ...plan.store].map((i) => i.id));
-  const row = (it, to) => h('label', { class: 'check-row' },
-    h('input', { type: 'checkbox', checked: true, onchange: (e) => { if (e.target.checked) chosen.add(it.id); else chosen.delete(it.id); } }),
-    h('span', { class: 'grow' }, it.name, h('span', { class: 'muted small block' }, `${store.shortName(it.location)} → ${to ? store.shortName(to.id) : '?'}`)));
-  const apply = async () => {
-    const moves = [...plan.bring.map((i) => [i, plan.wardrobe]), ...plan.store.map((i) => [i, storageFor(store.data, i)])]
-      .filter(([i, to]) => chosen.has(i.id) && to);
-    if (!moves.length) return toast('没有勾选要整理的衣服', 'error');
-    await saveUndoable(`换季整理（${plan.term.name}）：${moves.length} 件`, (data) => {
-      for (const [i, to] of moves) {
-        const it = data.items.find((x) => x.id === i.id);
-        if (it) moveItem(data, it, to.id);
-      }
-    }, `移好了 ${moves.length} 件衣服`).catch(() => {});
-    render();
-  };
-  return h('div', {},
-    header('换季整理'),
-    h('p', { class: 'muted small' }, `现在是${plan.term.name}之后，该穿${plan.term.wear.join('、')}的衣服。下次提醒：${next.name}（${next.date.slice(5).replace('-', '/')}），会发邮件。`),
-    !plan.wardrobe ? h('div', { class: 'card' }, h('p', {}, '没找到「当季衣柜」这个位置。')) : null,
-    plan.bring.length ? [h('div', { class: 'section-title' }, `拿进当季衣柜（${plan.bring.length}）`), h('div', { class: 'card' }, plan.bring.map((i) => row(i, plan.wardrobe)))] : null,
-    plan.store.length ? [h('div', { class: 'section-title' }, `收起来（${plan.store.length}）`), h('div', { class: 'card' }, plan.store.map((i) => row(i, storageFor(store.data, i))))] : null,
-    plan.bring.length || plan.store.length
-      ? h('div', { class: 'actions' }, h('button', { onclick: apply }, '按勾选整理'), h('a', { class: 'button secondary', href: '#/scan' }, '用扫码一件件整理'))
-      : h('div', { class: 'card' }, h('p', {}, '当季衣柜里正好都是该穿的，不用整理。')),
-    plan.unknown.length ? [h('div', { class: 'section-title' }, `没填季节的（${plan.unknown.length}，填了才能判断）`),
-      h('div', { class: 'list' }, plan.unknown.slice(0, 20).map((i) => itemRow(i)))] : null);
-}
-
 // ---------- 问一问 ----------
 
 // 聊天记录只放在内存里，关掉页面就没了
@@ -2206,7 +2172,6 @@ function wardrobeView() {
   const shoes = clothes.filter((i) => i.tags[0] === '鞋').length;
   const week = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
   const wornDays = new Set(clothes.flatMap((i) => (i.worn || []).filter((d) => d >= week))).size;
-  const next = nextSeasonTerm();
   return h('div', {},
     header('衣橱'),
     h('div', { class: 'tiles2' },
@@ -2221,11 +2186,10 @@ function wardrobeView() {
       cell({ href: '#/laundry', ic: 'wardrobe', color: 'var(--sage)', title: '洗衣篮',
         meta: (() => { const ls = laundryStatus(store.data); return ls.dirty.length || ls.washing.length ? `待洗 ${ls.dirty.length} · 在洗 ${ls.washing.length}` : ''; })(),
         count: laundryStatus(store.data).due ? '!' : null })),
-    h('div', { class: 'section-title' }, '出门和换季'),
+    h('div', { class: 'section-title' }, '出门'),
     h('div', { class: 'group' },
       cell({ href: '#/trips', ic: 'suitcase', color: '#5f7fa8', title: '出行',
-        count: store.data.trips.filter((t) => t.status === 'packed').length || null }),
-      cell({ href: '#/season', ic: 'season', color: 'var(--amber)', title: '换季整理', meta: next ? `下次：${next.name} ${next.date.slice(5).replace('-', '/')}` : '' })));
+        count: store.data.trips.filter((t) => t.status === 'packed').length || null })));
 }
 
 // ---------- 标签打印 ----------
@@ -2423,6 +2387,12 @@ function helpButton(title, sections) {
   }) }, '?');
 }
 
+// 位置名中英都写（「当季衣柜 Current Season Wardrobe」）：拆成中文和英文，英文小一号放第二行
+function splitName(name) {
+  const m = /^(.*?[^\x00-\x7f])\s+([A-Za-z].*)$/.exec(name);
+  return m ? [m[1], m[2]] : [name, ''];
+}
+
 // 底部弹出的一列按钮
 function actionSheet(title, actions) {
   const close = () => overlay.remove();
@@ -2448,7 +2418,7 @@ async function generateShopAi() {
     '只输出 JSON：{"suggestions":[{"name":"","reason":""}]}',
   ].join('\n');
   const user = [
-    `今天 ${todayStr()} ${WEEKDAY[new Date().getDay()]}，节气：${currentTerm().name}之后。`,
+    `今天 ${todayStr()} ${WEEKDAY[new Date().getDay()]}，节气：${solarTerm(todayStr()).name}。`,
     w ? `天气：${weatherLine(w)}` : '',
     `清单上已有：${shoppingList(d).map((e) => e.name).join('、') || '（空）'}`,
     `最近 90 天买过：${history.join('；') || '（没有记录）'}`,
@@ -2878,11 +2848,13 @@ function manageView() {
     header('管理'),
     h('section', { class: 'card' },
       h('h3', {}, '位置'),
-      store.locationTree().map(({ loc, depth }) => h('div', { class: 'manage-row', style: `padding-left:${depth * 18}px` },
-        h('span', { class: 'grow' }, loc.name),
-        h('button', { class: 'link', onclick: () => addLocation(loc.id) }, '＋子位置'),
-        h('button', { class: 'link', onclick: () => renameLocation(loc) }, '改名'),
-        h('button', { class: 'link danger-text', onclick: () => deleteLocation(loc) }, '删除'))),
+      store.locationTree().map(({ loc, depth }) => {
+        const [zhName, enName] = splitName(loc.name);
+        return h('button', { class: 'manage-row', type: 'button', style: `padding-left:${depth * 18}px`, 'aria-label': `${zhName} 的操作`,
+          onclick: () => actionSheet(zhName, [['新建子位置', () => addLocation(loc.id)], ['改名', () => renameLocation(loc)], ['删除', () => deleteLocation(loc), true]]) },
+          h('span', { class: 'grow' }, zhName, enName ? h('span', { class: 'en' }, enName) : null),
+          icon('more', 'i more'));
+      }),
       h('button', { class: 'secondary', onclick: () => addLocation(null) }, '新建顶层位置')),
     h('section', { class: 'card' },
       h('h3', {}, '类别'),
@@ -2895,8 +2867,8 @@ function manageView() {
           h('button', { class: `link${off ? ' muted' : ''}`, onclick: () => toggleLabel(tag) }, off ? '不贴' : '贴标签'),
           h('button', { class: `link${store.data.consumableTags.includes(tag) ? '' : ' muted'}`, onclick: () => toggleConsumable(tag) },
             store.data.consumableTags.includes(tag) ? '消耗品' : '耐用'),
-          h('button', { class: 'link', onclick: () => renameTag(tag) }, '改名'),
-          h('button', { class: 'link danger-text', onclick: () => deleteTag(tag) }, '删除'));
+          h('button', { class: 'link icon-only', 'aria-label': `${tag} 的操作`,
+            onclick: () => actionSheet(tag, [['改名', () => renameTag(tag)], ['改编号前 3 位', () => editCode(tag)], ['删除', () => deleteTag(tag), true]]) }, icon('more', 'i more')));
       }),
       h('button', { class: 'secondary', onclick: addTag }, '新建类别')));
 }

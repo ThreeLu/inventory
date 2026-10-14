@@ -858,16 +858,17 @@ def _(c):
     expect(p.locator(".sync-pill")).to_be_hidden()
 
 
-@step("换季整理：列出该收起来的，按勾选移动")
+@step("管理：位置英文名放第二行，点一行出「新建子位置 / 改名 / 删除」")
 def _(c):
     p = c.page
-    c.go("#/season")
-    expect(p.locator(".section-title", has_text="收起来")).to_be_visible()
-    before = {i["id"]: i["location"] for i in c.data()["items"]}
-    p.get_by_role("button", name="按勾选整理").click()
-    expect(p.get_by_text("当季衣柜里正好都是该穿的")).to_be_visible()
-    after = {i["id"]: i["location"] for i in c.data()["items"]}
-    assert after != before, "没有移动任何衣服"
+    c.go("#/manage")
+    row = p.get_by_role("button", name="当季衣柜 的操作")
+    expect(row.locator(".en")).to_have_text("Current Season Wardrobe")
+    row.click()
+    sheet = p.locator(".sheet")
+    expect(sheet.get_by_role("button")).to_have_text(["新建子位置", "改名", "删除", "取消"])
+    sheet.get_by_role("button", name="取消").click()
+    expect(p.locator(".sheet")).to_have_count(0)
 
 
 @step("设置：常住城市存进数据")
